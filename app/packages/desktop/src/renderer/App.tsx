@@ -12,8 +12,12 @@ import { Shelf } from './components/Shelf.js'
 import { Work } from './components/Work.js'
 import { HelpOverlay } from './components/HelpOverlay.js'
 import type { TourKey } from './components/Tour.js'
-import { StreakGreeting, alreadyGreeted, markGreeted } from './components/StreakGreeting.js'
-import { ResumePrompt, alreadyAskedResume, markResumeAsked } from './components/ResumePrompt.js'
+import {
+  StreakGreeting,
+  alreadyGreeted,
+  markGreeted,
+  type ResumeTarget,
+} from './components/StreakGreeting.js'
 import { applySettings, loadSettings } from './components/SettingsPanel.js'
 import { applyThemeCss } from './themes.js'
 import type { UserSettings } from '../shared/api.js'
@@ -34,19 +38,22 @@ export function App() {
    */
   const [tour, setTour] = useState<TourKey | null>(null)
   /**
-   * 启动时的连胜问候。
+   * 启动时的那一个弹窗。
    *
-   * **一次启动只弹一次** —— 不是每次回书架、不是每次换书。
-   * 弹第二次它就从鼓励变成打扰了。
+   * null = 不弹（还没算完，或者这次启动已经弹过了）。
+   * 里头的 `resume` 是「上次停在哪儿」，没有就是 null。
+   *
+   * **连胜和「回到上次」合在一个弹窗里**：这两件事在作者脑子里本来就是
+   * 同一件 —— 打开软件的那一秒，他要知道「我现在什么状态、该回哪儿去」。
+   * 拆成两步的话，第一个弹窗就成了一道必须先点掉的门（作者报过这个）。
    */
-  const [greeting, setGreeting] = useState(false)
+  const [greeting, setGreeting] = useState<{ resume: ResumeTarget | null } | null>(null)
   /**
    * 「回到上次那儿吗」。
    *
    * 存的是那本书本身，不只是路径 —— 点「回去接着写」时要把它交给 Work，
    * 到那时候再去列一遍书架就慢了。
    */
-  const [resume, setResume] = useState<BookSummary | null>(null)
   /**
    * **启动那一刻**的「上次在哪儿」。
    *
@@ -80,10 +87,7 @@ export function App() {
 
   // 进过一本书就把这一页翻过去了
   useEffect(() => {
-    if (book) {
-      everOpened.current = true
-      setResume(null)
-    }
+    if (book) everOpened.current = true
   }, [book])
 
   const patchSettings = useCallback((patch: Partial<UserSettings>) => {
@@ -97,48 +101,37 @@ export function App() {
     void api.updateSettings(patch).catch((e) => setError(msg(e)))
   }, [])
 
-  // 启动问候。首次引导还没看完时先让路 —— 一上来两个弹窗叠着很吓人
+  /**
+   * 启动弹窗：连胜 + 今天写了多少 + 上次停在哪儿。
+   *
+   * 首次引导还没看完时先让路 —— 一上来两个弹窗叠着很吓人。
+   *
+   * **先把「上次在哪儿」算完再弹**，不是先弹出来再补上去 ——
+   * 后者会让第二个按钮凭空冒出来一个，正好在他要点的位置上。
+   * 用的是启动那一刻的快照 `bootPlace`：`settings.lastPlace` 在他写字的
+   * 过程中一直在被更新，读活的那一份就会变成「退回书架时忽然被问」。
+   */
   useEffect(() => {
     if (!settings?.root || !settings.seenGuide || alreadyGreeted()) return
     markGreeted()
-    setGreeting(true)
-  }, [settings])
 
-  /**
-   * 上次停在哪本书里 —— 那本书还在吗。
-   *
-   * 【什么时候问】
-   *
-   * **只在刚打开软件、连胜问候看完、还没进过任何一本书的时候。**
-   * 三个条件缺一不可：
-   *
-   *   - 用的是启动那一刻的快照 `bootPlace`，不是活的 `settings.lastPlace`
-   *   - `everOpened` 为假 —— 退回书架时他想的是下一本，不是上一本
-   *   - `alreadyAskedResume()` —— 一次启动只问一次
-   *
-   * 少任何一个，都会变成「写完一本退回书架，忽然被问要不要回上一本」。
-   *
-   * 排在上手指引和连胜问候后面：一上来三个弹窗叠着谁都受不了。
-   * 书被删了、改了名，就当没这回事，**不弹一个点了会报错的按钮**。
-   */
-  useEffect(() => {
-    if (!settings?.root || !settings.seenGuide) return
-    if (greeting || book || everOpened.current || alreadyAskedResume()) return
     const place = bootPlace.current
-    if (!place) return
-    markResumeAsked()
+    if (!place) {
+      setGreeting({ resume: null })
+      return
+    }
     void api
       .listBooks()
       .then((books) => {
-        // 等这一趟回来的工夫，他可能已经自己点开一本书了
-        if (everOpened.current) return
+        // 书被删了、改了名，就当没这回事，**不给一个点了会报错的按钮**
         const hit = books.find((b) => b.rootPath === place.bookPath)
-        if (hit) setResume(hit)
+        setGreeting({ resume: hit ? { book: hit, place } : null })
       })
       .catch(() => {
-        /* 列不出书架就别问了，不是什么要紧事 */
+        // 列不出书架不该让问候也弹不出来
+        setGreeting({ resume: null })
       })
-  }, [settings, greeting, book])
+  }, [settings])
 
   // 选完文件夹、第一次进书架时把指引弹出来。只弹这一次
   useEffect(() => {
@@ -195,21 +188,16 @@ export function App() {
     return <Setup onChoose={() => void chooseRoot()} error={error} />
   }
 
-  const greetNode = greeting ? <StreakGreeting onClose={() => setGreeting(false)} /> : null
-
-  // 连胜问候还开着就先等着 —— 两个弹窗叠在一起很吓人
-  const resumeNode =
-    resume && !greeting && bootPlace.current ? (
-      <ResumePrompt
-        place={bootPlace.current}
-        bookTitle={resume.meta.title}
-        onResume={() => {
-          setBook(resume)
-          setResume(null)
-        }}
-        onDismiss={() => setResume(null)}
-      />
-    ) : null
+  const greetNode = greeting ? (
+    <StreakGreeting
+      resume={greeting.resume}
+      onShelf={() => setGreeting(null)}
+      onResume={(target) => {
+        setBook(target.book)
+        setGreeting(null)
+      }}
+    />
+  ) : null
 
   const helpNode =
     help !== 'no' ? (
@@ -253,7 +241,6 @@ export function App() {
     <>
       {helpNode}
       {greetNode}
-      {resumeNode}
       <Shelf
         root={settings.root}
         onOpen={setBook}

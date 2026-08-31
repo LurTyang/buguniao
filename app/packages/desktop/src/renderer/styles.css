@@ -601,6 +601,11 @@ input {
 .cm-foreshadow {
   border-bottom: 1.5px dotted var(--accent);
 }
+/* 行首的 @：它是标记不是正文，给点颜色一眼分得出来 */
+.cm-sticky-mark {
+  color: var(--accent);
+  font-weight: 600;
+}
 .cm-comment-mark {
   color: var(--text-faint);
   font-size: 0.8em;
@@ -4143,4 +4148,32 @@ button.links-item:hover {
 /* 「接着上次写？」比一般的输入框弹窗窄一点 —— 它只有两行字 */
 .resume-modal {
   max-width: 380px;
+}
+
+/* ── 启动弹窗：上次停在哪儿 + 两个按钮 ──
+ *
+ * 连胜和「回到上次」合在一屏。两件事在作者脑子里本来就是同一件：
+ * 打开软件的那一秒，他要知道「我现在什么状态、该回哪儿去」。
+ */
+.greet-last {
+  margin: 0 0 18px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-panel);
+  font-size: 13px;
+}
+.greet-last-where {
+  margin-top: 3px;
+  line-height: 1.7;
+  /* 书名和篇名都可能很长，撑不下就换行，别把弹窗顶宽 */
+  overflow-wrap: anywhere;
+}
+.greet-sep {
+  margin: 0 6px;
+  color: var(--text-faint);
+}
+.greet-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
 }
