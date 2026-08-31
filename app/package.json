@@ -1,0 +1,17 @@
+{
+  "name": "buguniao",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "version": "0.3.0",
+  "type": "module",
+  "description": "Buguniao - a writing workbench for long-form fiction",
+  "scripts": {
+    "test": "pnpm -r --stream test",
+    "typecheck": "pnpm -r --stream typecheck",
+    "check": "pnpm typecheck && pnpm test"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}

@@ -1,0 +1,51 @@
+# systemd 单元。放到 /etc/systemd/system/bugu-stats.service
+#
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now bugu-stats
+#   journalctl -u bugu-stats -f
+
+[Unit]
+Description=不咕鸟对外统计服务
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bugu
+Group=bugu
+WorkingDirectory=/opt/bugu-stats
+# 用自带的那份 node：机器上的 node 装在 /root/.local 下，
+# 而服务以 bugu 用户跑（还开着 ProtectHome），进不去
+ExecStart=/opt/bugu-stats/bin/node /opt/bugu-stats/dist/index.js
+Restart=always
+RestartSec=3
+
+Environment=NODE_ENV=production
+Environment=PORT=8787
+# 只听回环，外面由 nginx 反代进来。
+# 听 0.0.0.0 等于把没有 TLS 的接口直接摆在公网上
+Environment=HOST=127.0.0.1
+Environment=BUGU_DB=/var/lib/bugu-stats/stats.db
+Environment=BUGU_ISSUER=https://auth.ferret.icu/oidc
+# 建了 API 资源之后再填。空着就走 userinfo 认令牌，一样能用
+Environment=BUGU_AUDIENCE=
+
+# ── 收紧权限：这服务只需要读自己的代码、写一个数据库文件 ──
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/bugu-stats
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# ⚠️ MemoryDenyWriteExecute 不能开：V8 要 JIT，得把内存改成可执行，
+# 开了就是启动即 core dump（栈里是 v8::base::OS::SetPermissions）
+MemoryDenyWriteExecute=false
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

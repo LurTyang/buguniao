@@ -1,0 +1,21 @@
+packages:
+  - 'packages/*'
+
+# 这些依赖的安装脚本必须放行，否则装出来是残缺的：
+#   esbuild             postinstall 下载平台二进制
+#   electron            postinstall 下载 electron.exe，不放行会报
+#                       "Electron failed to install correctly"
+#   electron-winstaller 打包时挑 7-Zip 架构
+#
+# ⚠️ pnpm 11 认的是 allowBuilds 这张表，只写 onlyBuiltDependencies 不够。
+# 被忽略时 `pnpm install` 会以退出码 1 结束，把 workspace 级的脚本全挡住
+# （pnpm check 会直接跑不起来）。
+allowBuilds:
+  esbuild: true
+  electron: true
+  electron-winstaller: true
+
+onlyBuiltDependencies:
+  - esbuild
+  - electron
+  - electron-winstaller

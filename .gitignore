@@ -1,0 +1,27 @@
+node_modules/
+dist/
+build/
+out/
+release/
+*.log
+.DS_Store
+Thumbs.db
+.vite/
+.turbo/
+coverage/
+*.local
+.env
+.env.*
+!.env.example
+
+# Electron 打包产物
+app/packages/desktop/release/
+# Capacitor / Android
+app/packages/mobile/android/
+app/packages/mobile/ios/
+
+# 本地调试用的测试作品数据
+_测试数据/
+app/packages/desktop/out/
+app/packages/desktop/smoke.log
+app/packages/desktop/release/
