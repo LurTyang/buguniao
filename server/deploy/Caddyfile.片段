@@ -1,0 +1,10 @@
+# 追加到 /etc/caddy/Caddyfile 末尾。
+#
+# 不 import beian —— 那个片段是往 HTML 里塞备案页脚的，
+# 这个接口只吐 JSON，用不上。
+#
+# Caddy 自动签证书，不需要 certbot。
+
+bugu.char46.top {
+	reverse_proxy 127.0.0.1:8787
+}

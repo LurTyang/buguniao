@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      封面是读成 data: URL 塞进 <img> 的（渲染进程碰不到文件系统），
+      所以 img-src 必须显式允许 data: —— 只写 default-src 'self' 的话
+      浏览器会把它拦下来，界面上就是一个碎图标：图**读到了**却显示不出来，
+      比读不到还难查。
+
+      其余的照旧收紧：不许外连、不许 eval、脚本只能从本地来。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    />
+    <title>不咕鸟</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>
