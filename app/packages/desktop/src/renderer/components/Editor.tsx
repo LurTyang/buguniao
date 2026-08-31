@@ -165,6 +165,18 @@ function build(view: EditorView): DecorationSet {
     if (NO_INDENT_RE.test(line.text)) {
       marks.push({ from: line.from, to: line.from, deco: Decoration.line({ class: 'cm-no-indent' }) })
     }
+    /*
+     * 行首的 `@`（整行浮到稿纸上）单独上个色。
+     *
+     * 它跟 `#`、`<!--` 一样是**标记**，但那两个各自有样子（标题是粗大字、
+     * 伏笔锚点是灰小字），`@` 却跟正文一模一样 —— 顶格了也看不出它是标记。
+     * 给它一点颜色，一眼就分得出「这行不是正文」。
+     */
+    const at = /^\s*@/.exec(line.text)
+    if (at) {
+      const s0 = line.from + at[0].length - 1
+      marks.push({ from: s0, to: s0 + 1, deco: Decoration.mark({ class: 'cm-sticky-mark' }) })
+    }
 
     if (script) {
       const parsed = parseScriptLine(line.text, i - 1, 0, cast)
