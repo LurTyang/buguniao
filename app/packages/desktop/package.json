@@ -77,10 +77,10 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "不咕鸟",
-      "artifactName": "不咕鸟-安装版-${version}.exe"
+      "artifactName": "buguniao-setup-${version}.exe"
     },
     "portable": {
-      "artifactName": "不咕鸟_测试版v0.3.exe"
+      "artifactName": "buguniao-${version}-win-x64.exe"
     }
   }
 }
