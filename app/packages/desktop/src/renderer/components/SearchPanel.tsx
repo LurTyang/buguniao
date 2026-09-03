@@ -223,11 +223,6 @@ export function splitHighlight(snippet: string): Array<{ text: string; hit: bool
 function IndexInfo({ stats, onRebuild }: { stats: IndexStats | null; onRebuild(): void }) {
   return (
     <div className="index-info">
-      <div className="empty-hint" style={{ padding: '18px 12px 8px' }}>
-        输入两个字以上开始搜。
-        <br />
-        搜的是全文，不是标题。
-      </div>
       {stats && (
         <div className="stat-block" style={{ paddingTop: 0 }}>
           <div className="stat-row">
@@ -241,9 +236,6 @@ function IndexInfo({ stats, onRebuild }: { stats: IndexStats | null; onRebuild()
           <button className="btn" style={{ marginTop: 12, width: '100%' }} onClick={onRebuild}>
             重建索引
           </button>
-          <div className="faint" style={{ fontSize: 11, marginTop: 8, lineHeight: 1.7 }}>
-            索引只是派生数据，删了重扫就能复原，不影响你的稿子。
-          </div>
         </div>
       )}
     </div>

@@ -50,6 +50,10 @@ export const FONTS: FontChoice[] = [
  *   - 光秃秃一个字体名（更早的默认值就是 `楷体`）
  */
 export function resolveFontStack(value: string): string {
+  // 自选字体：`custom:某某`。它不在 FONTS 表里，得先认出来
+  const custom = value.startsWith('custom:') ? value.slice('custom:'.length) : ''
+  if (custom) return `'${custom}', '楷体', 'KaiTi', serif`
+
   const hit = FONTS.find((f) => f.key === value)
   if (hit) return hit.stack
 
@@ -68,4 +72,48 @@ export function resolveFontStack(value: string): string {
 export function fontKeyOf(value: string): string | null {
   const stack = resolveFontStack(value)
   return FONTS.find((f) => f.stack === stack)?.key ?? null
+}
+
+// ───────────────────────── 自己导进来的字体 ─────────────────────────
+
+/**
+ * 自选字体在设置里存成 `custom:字体名`。
+ *
+ * 带前缀是为了跟内置的三个 key 分开：不带的话，一个叫 `kai` 的
+ * 自选字体会把内置楷体顶掉，而两边都以为是对方的问题。
+ */
+export const CUSTOM_PREFIX = 'custom:'
+
+export const customFamilyOf = (value: string): string =>
+  value.startsWith(CUSTOM_PREFIX) ? value.slice(CUSTOM_PREFIX.length) : ''
+
+export const customValueOf = (family: string): string => CUSTOM_PREFIX + family
+
+/**
+ * 自选字体的 CSS 字体栈。
+ *
+ * 后面照样跟着楷体和 serif —— **字体里没有的字要有地方兜底**。
+ * 很多字体只做了常用字，遇到生僻字会显示成方框；跟一个兜底字体
+ * 就变成「这个字用楷体显示」，而不是一个豆腐块。
+ */
+export function customFontStack(family: string): string {
+  return `'${family}', '楷体', 'KaiTi', serif`
+}
+
+/**
+ * 把一款自选字体装进页面。
+ *
+ * 只留一个 style 标签：换字体就整个换掉，不会越积越多。
+ */
+export function applyCustomFont(family: string, dataUrl: string): void {
+  const id = 'bugu-custom-font'
+  const old = document.getElementById(id)
+  if (!family || !dataUrl) {
+    old?.remove()
+    return
+  }
+  const el = old ?? document.createElement('style')
+  el.id = id
+  el.textContent = `@font-face{font-family:'${family}';src:url('${dataUrl}');font-display:swap}`
+  if (!old) document.head.appendChild(el)
 }

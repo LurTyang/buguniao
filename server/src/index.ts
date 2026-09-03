@@ -6,13 +6,15 @@ import { Auth } from './auth.js'
 import { loadConfig } from './config.js'
 import { Store } from './db.js'
 import { createServer } from './server.js'
+import { parseAdminSubs } from './awards.js'
 
 const cfg = loadConfig()
 fs.mkdirSync(path.dirname(cfg.dbFile), { recursive: true })
 
 const store = new Store(cfg.dbFile)
 const auth = new Auth({ issuer: cfg.issuer, audience: cfg.audience })
-const server = createServer({ store, auth })
+const admins = parseAdminSubs(cfg.adminSubs)
+const server = createServer({ store, auth, admins })
 
 server.listen(cfg.port, cfg.host, () => {
   console.log(`[bugu-stats] 听在 ${cfg.host}:${cfg.port}`)

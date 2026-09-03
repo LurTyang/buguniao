@@ -100,8 +100,16 @@ export interface ExportRequest {
 
 export async function exportTxt(req: ExportRequest): Promise<{ bytes: number }> {
   const text = renderFullText(req.chapters, req.options)
-  // 导出的 txt 加 BOM —— 不加的话 Windows 记事本会把中文 UTF-8 认成乱码
-  await fs.writeFile(req.target, '﻿' + text, 'utf8')
+  await fs.mkdir(path.dirname(req.target), { recursive: true })
+  /*
+   * txt 加 BOM，md 不加。
+   *
+   * txt 加是因为不加的话 Windows 记事本会把中文 UTF-8 认成乱码（0.1 踩过）。
+   * md **不能加** —— 各种 Markdown 编辑器和静态站生成器碰到 BOM
+   * 会把第一行的 `#` 当成普通字符，标题就没了。
+   */
+  const bom = req.target.toLowerCase().endsWith('.md') ? '' : '﻿'
+  await fs.writeFile(req.target, bom + text, 'utf8')
   return { bytes: Buffer.byteLength(text, 'utf8') }
 }
 

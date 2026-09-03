@@ -30,11 +30,11 @@ export const TOUR_TITLE: Record<TourKey, string> = {
 }
 
 /** 示意图里的配色都走主题变量，深色模式下自动跟着变 */
-const INK = 'var(--text)'
-const DIM = 'var(--text-dim)'
+const INK = 'var(--text-color)'
+const DIM = 'var(--control-text-color)'
 const LINE = 'var(--line)'
-const ACCENT = 'var(--accent)'
-const PAPER = 'var(--bg)'
+const ACCENT = 'var(--primary-color)'
+const PAPER = 'var(--bg-color)'
 
 function Num({ x, y, n }: { x: number; y: number; n: number }) {
   return (

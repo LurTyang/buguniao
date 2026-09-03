@@ -21,10 +21,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { PromptModal } from './Modal.js'
+import { AwardBadge } from './AwardBadge.js'
 
 type Report = Awaited<ReturnType<typeof api.planReport>>
 
-/** 连胜到这些天数时给个小标记。天天恭喜会麻木，所以只在这几档 */
+/**
+ * 连胜到这些天数时给个小标记。天天恭喜会麻木，所以只在这几档。
+ *
+ * 书架那一栏已经不用它了 —— 那个位置让给了奖状（`AwardBadge`），
+ * 一个界面上不放两套荣誉。现在只剩启动问候里还挂着一个。
+ */
 const BADGES = [7, 30, 100, 365]
 
 export function badgeFor(streak: number): number | null {
@@ -50,13 +56,18 @@ export function UserRail({ onOpenSettings }: { onOpenSettings(): void }) {
 
   const t = r.todayTarget
   const pct = t.floor <= 0 ? 0 : Math.min(100, Math.round((r.todayWords / t.floor) * 100))
-  const badge = badgeFor(r.streak.current)
 
   return (
     <div className="user-rail">
       <button className="user-name" onClick={() => setRenaming(true)} title="点一下改名字">
         {r.nickname || '还没起名字'}
       </button>
+
+      {/*
+        奖状。**吃掉了原来那个连胜徽章** —— 一个位置不放两套荣誉。
+        没有奖状时这儿什么都不显示，不留一个空位置。
+      */}
+      <AwardBadge />
 
       <div className="user-since">
         {r.daysSinceStart > 0 ? (
@@ -86,11 +97,11 @@ export function UserRail({ onOpenSettings }: { onOpenSettings(): void }) {
         <div className="user-streak">
           <b>{r.streak.current}</b>
           <span className="faint">天</span>
-          {badge !== null && (
-            <span className="user-badge" title={`连续 ${badge} 天`}>
-              {badge}
-            </span>
-          )}
+          {/*
+            原来这儿挂着一个 7/30/100 的连胜徽章，被上面的奖状吃掉了 ——
+            一个界面上不放两套荣誉，否则两个都不值钱。
+            连胜本身那个数字够显眼了。
+          */}
         </div>
         {/*
           断了不挑脸，只留一行小字当参照 —— 那是「上次到过哪儿」，
@@ -116,6 +127,15 @@ export function UserRail({ onOpenSettings }: { onOpenSettings(): void }) {
           )}
         </div>
       </div>
+
+      {/*
+        ── 留给以后的位置 ──
+        作者：「左侧侧边栏非常空，留出接口在未来版本加入内容。当前版本不加。」
+        所以这儿只有一段撑开的空白，**不放任何占位内容** ——
+        「敬请期待」那种东西比空着更让人烦。
+        以后往这个 div 里塞东西即可，上下的布局不用再动。
+      */}
+      <div className="user-slot" />
 
       <button className="user-settings" onClick={onOpenSettings}>
         设置

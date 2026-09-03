@@ -19,8 +19,11 @@ import {
   type ResumeTarget,
 } from './components/StreakGreeting.js'
 import { applySettings, loadSettings } from './components/SettingsPanel.js'
+import { onSizeChange, onThemeSwitch } from './theme-size.js'
+import { applyCustomFont, customFamilyOf } from './fonts.js'
 import { applyThemeCss } from './themes.js'
 import type { UserSettings } from '../shared/api.js'
+import { Boom } from './components/Boom.js'
 
 export function App() {
   const [settings, setSettings] = useState<UserSettings | null>(null)
@@ -81,7 +84,19 @@ export function App() {
       bootPlace.current = s.lastPlace
       // 自选的那份 CSS 每次启动都要重新装 —— 它是个文件路径，
       // 作者可能在软件关着的时候改过、也可能把文件删了。读不到就当没配
-      void api.readThemeCss().then(applyThemeCss).catch(() => {})
+      void api
+        .readThemeCss()
+        .then((r) => applyThemeCss(r.css))
+        .catch(() => {})
+      // 自选字体每次启动也要重新装 —— 它是拿字节拼的 @font-face，
+      // 不装的话稿纸会退回楷体，而设置里还写着那个字体名
+      const fam = customFamilyOf(s.fontFamily)
+      if (fam) {
+        void api
+          .fontData(fam)
+          .then((d) => applyCustomFont(fam, d))
+          .catch(() => {})
+      }
     })
   }, [])
 
@@ -94,11 +109,30 @@ export function App() {
     // 先本地生效再落盘，改字号这类操作才跟手
     setSettings((prev) => {
       if (!prev) return prev
-      const next = { ...prev, ...patch }
+
+      /*
+       * 「每个主题各自记住字号」的那一处开关就在这儿。
+       *
+       * 放在 patchSettings 里而不是某个面板里，是因为**外观有两处**
+       * （稿纸侧边栏、书架设置），逻辑写在面板里就得写两遍。
+       * 这儿是所有设置改动的唯一入口。
+       */
+      const table = prev.fontSizeByTheme ?? {}
+      let extra: Partial<UserSettings> = {}
+      if (patch.theme !== undefined && patch.theme !== prev.theme) {
+        extra = onThemeSwitch(patch.theme, table, prev.fontSize)
+      } else if (patch.fontSize !== undefined) {
+        // 换主题那一次不记 —— 那时候的字号是上面这段自己改的，
+        // 记下来会把新主题的字号写进旧主题里，两档互相污染
+        extra = onSizeChange(prev.theme, patch.fontSize, table)
+      }
+
+      const merged = { ...patch, ...extra }
+      const next = { ...prev, ...merged }
       applySettings(next)
+      void api.updateSettings(merged).catch((e) => setError(msg(e)))
       return next
     })
-    void api.updateSettings(patch).catch((e) => setError(msg(e)))
   }, [])
 
   /**
@@ -226,13 +260,20 @@ export function App() {
       <>
         {helpNode}
         {greetNode}
-        <Work
-          book={book}
-          onBack={() => setBook(null)}
-          settings={settings}
-          onSettingsChange={patchSettings}
-          onChangeRoot={() => void chooseRoot()}
-        />
+        {/*
+          稿纸这棵树塌了的时候要**说出来**，不能给一片白纸。
+          白屏最坏的地方不是它坏了，是它什么都不说 ——
+          作者能报的全部信息就只剩「白的」。
+        */}
+        <Boom where="稿纸" onEscape={{ label: '回书架', run: () => setBook(null) }}>
+          <Work
+            book={book}
+            onBack={() => setBook(null)}
+            settings={settings}
+            onSettingsChange={patchSettings}
+            onChangeRoot={() => void chooseRoot()}
+          />
+        </Boom>
       </>
     )
   }
@@ -241,14 +282,16 @@ export function App() {
     <>
       {helpNode}
       {greetNode}
-      <Shelf
-        root={settings.root}
-        onOpen={setBook}
-        onChangeRoot={() => void chooseRoot()}
-        createSignal={createSignal}
-        settings={settings}
-        onSettings={patchSettings}
-      />
+      <Boom where="书架">
+        <Shelf
+          root={settings.root}
+          onOpen={setBook}
+          onChangeRoot={() => void chooseRoot()}
+          createSignal={createSignal}
+          settings={settings}
+          onSettings={patchSettings}
+        />
+      </Boom>
     </>
   )
 }

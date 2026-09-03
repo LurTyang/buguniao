@@ -9,6 +9,24 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { app } from 'electron'
+import { migrateConfig } from './config-migrate.js'
+import type { ThemeDraft } from '../shared/theme-draft.js'
+import { EMPTY_SLOT as _EMPTY, type ThemeSlot } from '../shared/theme-slots.js'
+import type { Award } from '@bugu/core'
+
+/**
+ * 一个自选样式的槽位。
+ *
+ * **存名字和颜色，不只是路径** —— 作者要求给自定义主题取名，
+ * 而色块要跟那份主题的稿纸颜色一致。每次都去读一遍 CSS 再抠一次
+ * 太慢（书架每次打开都要画那排色块），所以导入时算好存下来。
+ *
+ * 类型和「末尾永远留一个空位」那套规矩都在 shared/theme-slots.ts ——
+ * 界面那边也要用同一套，不能各写一份。
+ */
+export type { ThemeSlot } from '../shared/theme-slots.js'
+
+export { EMPTY_SLOT } from '../shared/theme-slots.js'
 
 export interface UserConfig {
   schemaVersion: number
@@ -31,14 +49,29 @@ export interface UserConfig {
    */
   theme: string
   /**
-   * 自定义主题 CSS 文件的绝对路径。空 = 不用。
+   * 自选样式的三个槽位（存的是 CSS 文件路径，空串 = 这一格空着）。
    *
-   * **Typora 的主题文件可以直接选。** 它们排版正文用的是 `#write`，
-   * 所以稿纸容器也顶着这个 id —— 字体、字号、行距、标题、引用、代码块
-   * 这些正文样式基本能直接用上。界面（侧边栏、按钮）不受它影响：
-   * 一份为「一整个窗口就是文档」写的 CSS，套到有侧边栏的界面上只会更难看。
+   * **三个而不是一个**，是因为作者报的：换回预设主题之后想换回自选样式，
+   * 得重新走一遍选文件 —— 而他手上就那两三份主题，来回换是常事。
+   * 槽位一填就留着，切换只是点一下。
    */
+  themeCssSlots: ThemeSlot[]
+  /** 现在用第几个槽位。-1 = 不用自选样式（用上面那三档预设） */
+  themeCssActive: number
+  /** 0.4 之前只有一个位置。留着只为了把老配置搬进槽位 0 */
   themeCss: string
+  /**
+   * 调色器手上那份**还在改的**草稿。null = 还没调过。
+   *
+   * ⚠️ 它**不是**「正在用的主题」—— 用的那套在栏位里（`themeCssSlots`）。
+   * 这一份的唯一作用是：调色器关掉再打开时能接着改，
+   * 不至于每次都从预设重来。
+   *
+   * 存值不存文件，是因为它要能随时接着改：存成文件再读回来
+   * 就得反过来解析 CSS，那一步只要有一处解错，作者的配色就丢了。
+   * 导出成 .css 是**另一件事**，不影响这份草稿。
+   */
+  themeDraft: ThemeDraft | null
   /**
    * 正文字体。存的是 key（`kai`/`song`/`hei`），CSS 字体栈由界面那边翻译，
    * 见 `renderer/fonts.ts`。主进程不该知道 CSS 长什么样。
@@ -74,6 +107,68 @@ export interface UserConfig {
   /** 上次推成功是什么时候（ISO，本机时间）。空 = 一次都没推过 */
   statsLastPushAt: string
   /**
+   * 服务器上那些奖状的**本地副本**。
+   *
+   * 留一份是为了**离线时它别消失** —— 奖状是拿到手的东西，
+   * 不该因为今天没网就从界面上没了。每次读 /me 成功都刷新这一份。
+   */
+  statsAwards: Award[]
+  /** 挂哪一张（奖状 id）。空 = 挂最新的那张 */
+  statsAwardPinned: string
+  /**
+   * 每个主题各自的字号。
+   *
+   * 夜间想大一号是常见需求 —— 深色底上同样的字号会显得小。
+   * 换主题时自动换回那一档上次用的字号，换完不用再手动调一遍。
+   */
+  fontSizeByTheme: Record<string, number>
+  /**
+   * 自己导进来的字体。key 是字体名（CSS 里用它），值是文件名。
+   *
+   * 字体文件**复制进 `userData/fonts/`**，不是记原路径 ——
+   * 记路径的话，他哪天清理下载文件夹，字体就没了。
+   */
+  customFonts: Record<string, string>
+  /**
+   * 打字机模式 —— 竖向：当前行停在屏幕中部。
+   *
+   * 长篇作者一坐两三个小时，眼睛一路走到屏幕底再跳回顶部，一天几百次。
+   */
+  typewriterV: boolean
+  /**
+   * 打字机模式 —— 横向：当前列停在水平中央，稿纸横着动。
+   *
+   * ⚠️ **打开它会关掉自动折行**，两者互斥：折行时一行永远填不满，
+   * 光标也就永远走不到右边，横向根本没得动。
+   */
+  typewriterH: boolean
+  /** 专注模式：当前段落之外的字变淡 */
+  focusMode: boolean
+  /** 稿纸上下留白（像素）。0 = 老样子，顶着边 */
+  pagePadY: number
+  /**
+   * 首行缩进几个字。0 = 不缩进。
+   *
+   * 是 CSS 的 text-indent，**文件里一个全角空格都不存**（03 §2）。
+   * 要真的写进文件的那种，走导出（见 §4.7）。
+   */
+  paraIndent: number
+  /** 智能替换的总开关 */
+  smartReplace: boolean
+  /**
+   * 标点替换的规则表。
+   *
+   * **一张表，没有「内置」和「自定义」之分** —— 出厂那几条只是
+   * 第一次用时的初始值，之后作者改哪条、删哪条都归他管。
+   * 存在即生效，不存在即删除；所以这里也没有 enabled。
+   *
+   * 空数组 = 一条都不替换。`null` = 还没初始化过，该写入出厂那几条。
+   */
+  smartRules: Array<
+    | { id: string; kind: 'plain'; from: string; to: string }
+    | { id: string; kind: 'pair'; from: string; open: string; close: string }
+  > | null
+  /**
    * 两个侧边栏各自的宽度（像素）。
    *
    * **按面板记，不按左右记** —— 作者把哪个面板拖宽，是因为那个面板的内容多，
@@ -96,6 +191,10 @@ const DEFAULTS: Omit<UserConfig, 'deviceId'> = {
   countMode: 'withPunctuation',
   theme: 'light',
   themeCss: '',
+  // 默认就一个空位 —— 它同时是「加一份主题」那个按钮
+  themeCssSlots: [{ ..._EMPTY }],
+  themeCssActive: -1,
+  themeDraft: null,
   fontFamily: 'kai',
   fontSize: 18,
   lineHeight: 1.9,
@@ -107,6 +206,19 @@ const DEFAULTS: Omit<UserConfig, 'deviceId'> = {
   seenTours: [],
   statsAutoPush: false,
   statsLastPushAt: '',
+  statsAwards: [],
+  statsAwardPinned: '',
+  fontSizeByTheme: {},
+  customFonts: {},
+  typewriterV: false,
+  typewriterH: false,
+  focusMode: false,
+  pagePadY: 0,
+  paraIndent: 2,
+  // 智能替换默认开着：中文标点是每天几百次的摩擦，
+  // 而它每一条都能单独关，也能一键全关
+  smartReplace: true,
+  smartRules: null,
   deviceName: '',
   dirBarWidth: 250,
   // 功能栏比目录栏宽一点 —— AI 设置那一屏字段多，250 装不下
@@ -143,8 +255,19 @@ export async function loadConfig(): Promise<UserConfig> {
   try {
     const raw = await fs.readFile(configPath(), 'utf8')
     const parsed = JSON.parse(raw) as Partial<UserConfig>
+    /*
+     * 先把老形状搬成新形状，再往默认值上盖。
+     *
+     * **顺序很要紧**：搬完再盖，才轮得到迁移的结果覆盖掉老字段。
+     * 反过来的话老值会把迁移结果又盖回去。
+     *
+     * 这一层存在的理由：0.4 中途把 smartRules 从「开关对象」改成了
+     * 「规则数组」，而升级上来的配置里还是对象 —— 渲染进程一调
+     * `.filter` 就炸，整个界面白屏。本地永远试不出来，因为本地是新配置。
+     */
+    const moved = migrateConfig(parsed as Record<string, unknown>)
     const id = parsed.deviceId ?? newDeviceId()
-    cache = { ...DEFAULTS, deviceId: id, ...parsed }
+    cache = { ...DEFAULTS, deviceId: id, ...parsed, ...moved } as UserConfig
     if (!cache.deviceName) cache.deviceName = defaultDeviceName(id)
   } catch {
     // 配置坏了或不存在都不该拦住启动 —— 用默认值重建一份

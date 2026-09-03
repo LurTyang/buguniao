@@ -11,7 +11,7 @@
  */
 
 import { useEffect, useRef } from 'react'
-import { Compartment, EditorState, Facet, type Extension } from '@codemirror/state'
+import { Compartment, EditorState, Facet, Transaction, type Extension } from '@codemirror/state'
 import { emptyCast, knownName, parseScriptLine, type Cast } from '@bugu/core'
 import {
   EditorView,
@@ -28,6 +28,10 @@ import { markdown } from '@codemirror/lang-markdown'
 import { syntaxHighlighting, HighlightStyle } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 import { searchKeymap } from '@codemirror/search'
+import { isStickyDrag } from '../sticky-drag.js'
+import { FENCE_RE, lineKindOf } from '../md-line-class.js'
+import { focusMode, smartReplace, typewriterHorizontal, typewriterVertical } from '../editor-writing.js'
+import type { Rule as SmartRule } from '../smart-replace.js'
 
 const highlight = HighlightStyle.define([
   { tag: tags.heading1, class: 'cm-heading', fontSize: '1.5em' },
@@ -110,6 +114,9 @@ export const scriptCast = Facet.define<Cast, Cast>({
 
 const scriptComp = new Compartment()
 const castComp = new Compartment()
+/** 写作手感那几样：打字机、专注模式、自动折行。都用 Compartment 装着，
+ *  切换时只重配这一格 —— 重建编辑器会把光标和撤销历史一起丢掉 */
+const writingComp = new Compartment()
 
 const decorate = ViewPlugin.fromClass(
   class {
@@ -159,9 +166,29 @@ function build(view: EditorView): DecorationSet {
   const caretLine = view.state.doc.lineAt(view.state.selection.main.head).number
 
   // 按行加「不缩进」类；剧本模式下再按行别加排版类
+  /*
+   * 代码围栏是唯一需要跨行才能判断的东西，所以从第一行一路数下来。
+   * 这也是为什么这个循环不能只走视野内的行。
+   */
+  let fenceOpen = false
   for (let i = 1; i <= view.state.doc.lines; i++) {
     const line = view.state.doc.line(i)
+    const isFence = FENCE_RE.test(line.text)
+    const inFence = isFence || fenceOpen
+    if (isFence) fenceOpen = !fenceOpen
     if (line.from > view.viewport.to || line.to < view.viewport.from) continue
+
+    /*
+     * Typora 式的行别：`.cm-h1`、`.cm-quote`、`.cm-code`……
+     *
+     * 稿纸里没有真的 <h1>，主题却总在写 `#write h1`。给行标上类之后，
+     * 主题能直接写 `#write .cm-h1`，导入的 Typora 主题也能被翻过来
+     * （见 main/theme-css.ts 的 bridgeSelectors）。
+     */
+    const kind = lineKindOf(line.text, inFence)
+    if (kind) {
+      marks.push({ from: line.from, to: line.from, deco: Decoration.line({ class: `cm-${kind}` }) })
+    }
     if (NO_INDENT_RE.test(line.text)) {
       marks.push({ from: line.from, to: line.from, deco: Decoration.line({ class: 'cm-no-indent' }) })
     }
@@ -236,6 +263,22 @@ function build(view: EditorView): DecorationSet {
   )
 }
 
+/**
+ * 按开关拼出那几个扩展。
+ *
+ * **横向打字机会关掉自动折行** —— 折行时一行永远填不满、光标也就
+ * 永远走不到右边，横向根本没得动。这是硬冲突，只能二选一；
+ * 设置里那句提示就是为了别让它显得像个 bug。
+ */
+function writingExtensions(w: EditorProps['writing']): Extension[] {
+  const out: Extension[] = []
+  if (!w?.typewriterH) out.push(EditorView.lineWrapping)
+  if (w?.typewriterV) out.push(typewriterVertical())
+  if (w?.typewriterH) out.push(typewriterHorizontal())
+  if (w?.focus) out.push(focusMode())
+  return out
+}
+
 export interface EditorProps {
   /** 文档路径，变化时重建编辑器 */
   docPath: string
@@ -250,6 +293,13 @@ export interface EditorProps {
   /** 选区变化。伏笔面板靠它决定「标为埋点」能不能点 */
   onSelectionChange?(range: { start: number; end: number } | null): void
   /**
+   * 每次编辑敲进去多少字、删掉多少字。
+   *
+   * 从 changeset 里数，不是「前后字数一减」—— 一减只剩净值，
+   * 而改稿那天净值常常是负的，看着像一下午白干。
+   */
+  onEdit?(added: number, removed: number): void
+  /**
    * 外部改了正文时递增这个数，编辑器会把内容换成 initialBody。
    * 打伏笔标记是由主进程改的正文，得这样推回编辑器。
    */
@@ -263,6 +313,21 @@ export interface EditorProps {
   revealRange?: { start: number; end: number; nonce: number } | null
   /** 剧本排版。只影响显示，一个字节都不写进文件 */
   script?: boolean
+  /**
+   * 写起来什么感觉的那几个开关。
+   *
+   * 全都**只影响显示与输入的那一刻**，不改文件里已有的字。
+   */
+  writing?: {
+    /** 当前行停在屏幕中部 */
+    typewriterV: boolean
+    /** 当前列停在水平中央。**它会关掉自动折行**，两者互斥 */
+    typewriterH: boolean
+    /** 当前段落之外变淡 */
+    focus: boolean
+    /** 智能替换的规则。空数组 = 不替换 */
+    rules: readonly SmartRule[]
+  }
   /**
    * 这本书的角色名单（设定集里读来的）。
    * 名单里的名字才会被单独排一行 —— 靠正则猜的不敢拆。
@@ -287,9 +352,11 @@ export function Editor({
   onWikiLink,
   onCaretMove,
   onSelectionChange,
+  onEdit,
   externalRevision = 0,
   revealRange = null,
   script = false,
+  writing,
   cast,
   onContextMenu,
   insertRequest = null,
@@ -301,6 +368,12 @@ export function Editor({
   scriptRef.current = script
   const castRef = useRef(cast)
   castRef.current = cast
+  // 规则用 ref 拿：作者在设置里一改就该立刻生效，
+  // 而重建编辑器会丢光标和撤销历史
+  const rulesRef = useRef<readonly SmartRule[]>(writing?.rules ?? [])
+  rulesRef.current = writing?.rules ?? []
+  const writingRef = useRef(writing)
+  writingRef.current = writing
   // 用 ref 持有回调，避免回调变化导致编辑器重建（那会丢光标位置）
   const cbRef = useRef({
     onChange,
@@ -308,6 +381,7 @@ export function Editor({
     onWikiLink,
     onCaretMove,
     onSelectionChange,
+    onEdit,
     onContextMenu,
   })
   cbRef.current = {
@@ -316,6 +390,7 @@ export function Editor({
     onWikiLink,
     onCaretMove,
     onSelectionChange,
+    onEdit,
     onContextMenu,
   }
 
@@ -331,7 +406,8 @@ export function Editor({
       history(),
       drawSelection(),
       highlightActiveLine(),
-      EditorView.lineWrapping,
+      writingComp.of(writingExtensions(writingRef.current)),
+      smartReplace(() => rulesRef.current),
       markdown(),
       syntaxHighlighting(highlight),
       decorate,
@@ -351,6 +427,27 @@ export function Editor({
       ]),
       EditorView.updateListener.of((u) => {
         if (u.docChanged) cbRef.current.onChange(u.state.doc.toString())
+        if (u.docChanged && cbRef.current.onEdit) {
+          /*
+           * 数这一次改动增删了多少字。
+           *
+           * **只数作者真敲的那些**：换文档、主进程回填正文走的是
+           * 另一条路（那些 transaction 没有 userEvent），
+           * 把它们算进「这一坐写了多少」会一下子多出几万字。
+           */
+          let added = 0
+          let removed = 0
+          for (const tr of u.transactions) {
+            if (!tr.docChanged) continue
+            const ev = tr.annotation(Transaction.userEvent)
+            if (!ev) continue
+            tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+              removed += toA - fromA
+              added += inserted.length
+            })
+          }
+          if (added > 0 || removed > 0) cbRef.current.onEdit(added, removed)
+        }
         if (u.docChanged || u.selectionSet || u.geometryChanged) reportCaret(u.view)
         if (u.docChanged || u.selectionSet) {
           const sel = u.state.selection.main
@@ -374,6 +471,31 @@ export function Editor({
         scroll(_e, view) {
           reportCaret(view)
           return false
+        },
+
+        /*
+         * 拖便利贴过来时，**编辑器一个字都不许收**。
+         *
+         * 这是 0.3 里那个 bug 的第二道闸：目录树曾经在拖便利贴时
+         * 顺手 setData('text/plain', 卡片标题)，CodeMirror 看见 text/plain
+         * 就把标题当正文插进了稿子里 —— 作者拖一张人物卡出来，
+         * 正文里凭空多一个人名，而且**不报任何错**。
+         *
+         * 第一道闸是不再放 text/plain（见 DirectoryTree）。这一道是防
+         * 「哪天有人为了别的兼容性又把它加回来」—— 那时候正文会重新开始
+         * 冒人名，而没人会想到是这里。
+         */
+        dragover(event) {
+          if (!isStickyDrag(event)) return false
+          event.preventDefault()
+          return true
+        },
+        drop(event) {
+          if (!isStickyDrag(event)) return false
+          // preventDefault 之后 CodeMirror 不会再往文档里插任何东西；
+          // 事件继续往上冒，由稿纸那层去摆便利贴
+          event.preventDefault()
+          return true
         },
       }),
     ]
@@ -433,6 +555,13 @@ export function Editor({
       effects: scriptComp.reconfigure(scriptMode.of(script)),
     })
   }, [script])
+
+  /** 写作手感那几个开关变了：只重配那一格，不重建编辑器 */
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: writingComp.reconfigure(writingExtensions(writing)),
+    })
+  }, [writing?.typewriterV, writing?.typewriterH, writing?.focus])
 
   /** 人物卡改了、或换了人物分类，名单要跟着换 */
   useEffect(() => {

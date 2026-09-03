@@ -16,7 +16,7 @@
 
 import { useEffect, useState } from 'react'
 
-export type SettingsSection = 'me' | 'plan' | 'account' | 'ai' | 'library'
+export type SettingsSection = 'me' | 'plan' | 'account' | 'ai' | 'library' | 'appearance'
 
 export function SettingsOverlay({
   onClose,

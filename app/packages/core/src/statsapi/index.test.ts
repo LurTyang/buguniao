@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   STATS_BASE,
+  parseAwards,
   checkHandle,
   claimHandleRequest,
   forgetMeRequest,
@@ -178,5 +179,40 @@ describe('短名的规矩（要跟服务端 handle.ts 一字不差）', () => {
       expect(r.ok, h).toBe(false)
       expect(r.ok === false && r.why.length > 0, h).toBe(true)
     }
+  })
+})
+
+describe('奖状', () => {
+  it('读出来是那四个字段', () => {
+    const a = parseAwards([{ id: 'nano-2026', name: '不咕之星', note: '一等奖', at: '2026-08-27T10:00:00.000Z' }])
+    expect(a).toEqual([
+      { id: 'nano-2026', name: '不咕之星', note: '一等奖', at: '2026-08-27T10:00:00.000Z' },
+    ])
+  })
+
+  it('缺字段的补空串，不崩', () => {
+    expect(parseAwards([{ name: '冠军' }])).toEqual([{ id: '', name: '冠军', note: '', at: '' }])
+  })
+
+  it('【关键】名字是空的整条丢掉 —— 挂一个空白徽章比不挂更让人困惑', () => {
+    expect(parseAwards([{ id: 'a', name: '' }, { id: 'b', name: '   ' }, { id: 'c', name: '冠军' }]))
+      .toEqual([{ id: 'c', name: '冠军', note: '', at: '' }])
+  })
+
+  it('不是数组、是 null、是别的东西，一律当没有', () => {
+    expect(parseAwards(null)).toEqual([])
+    expect(parseAwards(undefined)).toEqual([])
+    expect(parseAwards('冠军')).toEqual([])
+    expect(parseAwards({ 0: { name: '冠军' } })).toEqual([])
+  })
+
+  it('/me 里没有 awards 字段时当空 —— 服务器还没升级也不该白屏', () => {
+    expect(parseMyProfile({ handle: 'ming', updatedAt: '', stats: null }).awards).toEqual([])
+  })
+
+  it('/me 里有就读出来', () => {
+    const me = parseMyProfile({ handle: 'ming', awards: [{ id: 'x', name: '冠军' }] })
+    expect(me.awards).toHaveLength(1)
+    expect(me.awards[0]?.name).toBe('冠军')
   })
 })

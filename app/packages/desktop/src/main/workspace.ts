@@ -62,6 +62,7 @@ import {
   judgeDays,
   streakOf,
   targetFor,
+  SIGN_IN_WORDS,
   recordTargetChange,
   viewMilestone,
   sortMilestones,
@@ -1421,6 +1422,58 @@ export class Workspace {
   }
 
   /** 把整本书读成导出用的章节数组（含卷名） */
+  /**
+   * 收大纲和设定集，供导出用。
+   *
+   * 跟 `collectForExport()` 分开是因为它们的形状不一样：正文是「卷 → 章」，
+   * 大纲是一堆平铺的文档，设定集是「分类 → 卡片」。
+   * 硬塞进同一个函数只会让三种都别扭。
+   *
+   * 设定集**收成一份**、分类当二级标题 —— 作者定的：
+   * 「同一个文件就好」。它是拿来通读的，拆成七八个文件反而难找。
+   */
+  async collectExtras(
+    bookPath: string,
+    what: { outline?: boolean; settings?: boolean },
+  ): Promise<{
+    outline: Array<{ title: string; body: string; volume: string | null }>
+    settings: Array<{ title: string; body: string; volume: string | null }>
+  }> {
+    const tree = await coreLoadTree(this.backend, bookPath)
+    const outline: Array<{ title: string; body: string; volume: string | null }> = []
+    const settings: Array<{ title: string; body: string; volume: string | null }> = []
+
+    if (what.outline) {
+      for (const n of tree.outline) {
+        outline.push({ title: n.title, body: (await readDoc(this.backend, n.path)).body, volume: null })
+      }
+    }
+
+    if (what.settings) {
+      // 分类当「卷」传下去 —— 导出那一层本来就会把 volume 排成二级标题，
+      // 正好是作者要的「一个文件、分类当二级标题」
+      for (const c of tree.settings) {
+        for (const card of c.cards) {
+          settings.push({
+            title: card.title,
+            body: (await readDoc(this.backend, card.path)).body,
+            volume: c.name,
+          })
+        }
+      }
+      // 没归类的那些放最后，不硬塞进某个分类里
+      for (const card of tree.looseSettings) {
+        settings.push({
+          title: card.title,
+          body: (await readDoc(this.backend, card.path)).body,
+          volume: null,
+        })
+      }
+    }
+
+    return { outline, settings }
+  }
+
   async collectForExport(
     bookPath: string,
     range?: { fromPath?: string; toPath?: string },
@@ -1740,7 +1793,21 @@ export class Workspace {
     }
 
     const days = byDay(mergeStats(shards))
-    const streak = computeStreak(days, day)
+
+    /*
+     * 签到线用**作者自己设的今日底线**，不是那个写死的 5000。
+     *
+     * 这一处原来是 `computeStreak(days, day)` —— 没传 opts，于是
+     * signInWords 一路落到常量 5000。作者在码字计划里把目标改成 2000，
+     * 稿纸右上角却始终写着「还差 5,000」，怎么改都不动。
+     *
+     * 没设目标（floor 为 0）时才退回那个常量 —— 那时候总得有条线，
+     * 不然「签到」这个概念就不成立了。
+     */
+    const plan = await loadPlan(this.backend)
+    const floor = targetFor(day, plan.targets).floor
+    const opts = floor > 0 ? { signInWords: floor } : {}
+    const streak = computeStreak(days, day, opts)
     return {
       day,
       words: days.find((d) => d.day === day)?.words ?? 0,
@@ -1748,6 +1815,7 @@ export class Workspace {
       wordsToSignIn: streak.wordsToSignIn,
       streak: streak.current,
       streakMakeups: streak.currentMakeups,
+      signInWords: floor > 0 ? floor : SIGN_IN_WORDS,
     }
   }
 
@@ -1795,7 +1863,7 @@ function bookRootOf(docPath: string): string {
   return i === -1 ? docPath : docPath.slice(0, i)
 }
 
-/** 剥掉检索片段里的高亮控制字符（ / ），它们只给界面用 */
+/** 剥掉检索片段里的高亮控制字符（U+0001 / U+0002），它们只给界面用 */
 function stripHighlight(s: string): string {
   return s.replace(new RegExp(String.fromCharCode(1) + '|' + String.fromCharCode(2), 'g'), '')
 }

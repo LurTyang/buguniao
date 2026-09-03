@@ -27,6 +27,7 @@ import { selectionRect, useContextMenu } from './ContextMenu.js'
 import { OutlineTree, SettingsTree, TextTree, type TreeActions } from './DirectoryTree.js'
 import { SearchPanel } from './SearchPanel.js'
 import { StickyLayer, placeNewSticky } from './StickyLayer.js'
+import { isStickyDrag, stickyCardOf } from '../sticky-drag.js'
 import { ForeshadowPanel } from './ForeshadowPanel.js'
 import { HistoryPanel } from './HistoryPanel.js'
 import { PomodoroPanel, usePomodoro } from './PomodoroPanel.js'
@@ -45,6 +46,8 @@ import { IdeaPanel } from './IdeaPanel.js'
 import { WordsLineChart } from './charts.js'
 import type { ForeshadowListItem } from '@bugu/core'
 import type { LoadedSticky, PinnedSticky } from '@bugu/core'
+import { SEED_RULES, liveRules } from '../smart-replace.js'
+import { EMPTY_SESSION, addEdit, describe as describeSession } from '../session-count.js'
 
 /** 停止输入多久后自动保存（05 §2） */
 const AUTOSAVE_IDLE_MS = 3000
@@ -64,6 +67,16 @@ type ToolTab =
   | 'script'
   | 'game'
   | 'milestone'
+  /**
+   * 导入 / 导出。
+   *
+   * 它不是一个面板，是**开一个弹窗** —— 点了之后 toolTab 不会真的切过去。
+   * 放进这张单子只是为了让它在侧边栏里看得见：
+   * 原来它只挂在应用菜单的「文件」下，而菜单栏是自动隐藏的
+   * （`autoHideMenuBar: true`），不按 Alt 根本看不见。
+   * 作者找了半天没找到导出在哪儿 —— 那不是他的问题。
+   */
+  | 'transfer'
 
 interface TodayProgress {
   day: string
@@ -72,6 +85,8 @@ interface TodayProgress {
   wordsToSignIn: number
   streak: number
   streakMakeups: number
+  /** 今天的签到线。**跟着作者设的每日底线走**，没设目标才用默认的 5000 */
+  signInWords: number
 }
 
 /** 当前打开的弹窗 */
@@ -739,6 +754,32 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
     return () => offs.forEach((off) => off())
   }, [doSave, flushSave, onBack, toolBar, dirBar, flash])
 
+  /**
+   * 写作手感那几个开关，拼成编辑器要的那一份。
+   *
+   * 用 useMemo 是必须的：这个对象每渲染一次都新建的话，
+   * 编辑器那边的 effect 会以为「开关变了」，每敲一个字重配一次扩展。
+   */
+  const writing = useMemo(
+    () => ({
+      typewriterV: settings.typewriterV,
+      typewriterH: settings.typewriterH,
+      focus: settings.focusMode,
+      rules: liveRules(settings.smartRules ?? SEED_RULES, settings.smartReplace),
+    }),
+    [
+      settings.typewriterV,
+      settings.typewriterH,
+      settings.focusMode,
+      settings.smartReplace,
+      settings.smartRules,
+    ],
+  )
+
+  /** 这一坐写了多少、删了多少。从软件打开算起，点顶栏那个数清零 */
+  const [session, setSession] = useState(EMPTY_SESSION)
+  const sessionText = useMemo(() => describeSession(session), [session])
+
   const counts = useMemo(() => countWords(body), [body])
   const chapters = useMemo(() => (tree ? flattenChapters(tree.text) : []), [tree])
   const volumes = useMemo(
@@ -1011,14 +1052,18 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
           <button
             key={t.key}
             className={`panel-item${toolTab === t.key ? ' active' : ''}`}
-            onClick={() => setToolTab(t.key)}
+            onClick={() => {
+              // 「导入 / 导出」是个弹窗，不是面板：切过去会显示一片空白
+              if (t.key === 'transfer') setTransfer('export')
+              else setToolTab(t.key)
+            }}
           >
             <span>{t.label}</span>
             {!t.done && <span className="todo">未做</span>}
           </button>
         ))}
       </div>
-      <div style={{ borderTop: '1px solid var(--border)', marginTop: 6 }}>
+      <div style={{ borderTop: '1px solid var(--window-border)', marginTop: 6 }}>
         {toolTab === 'stats' ? (
           <StatsPanel
             bookPath={book.rootPath}
@@ -1216,6 +1261,20 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
           )}
         </div>
         <div className="topbar-right">
+          {/*
+            这一坐的产出。**三个数都摆出来**：改稿那天净值常常是负的，
+            只显示净值看着像一下午白干 —— 而删掉三百字不是没干活。
+            点一下清零重新计（换个时段重新算一坐）。
+          */}
+          {sessionText && (
+            <span
+              className="topbar-session"
+              title="这一坐的产出。点一下清零重新计"
+              onClick={() => setSession(EMPTY_SESSION)}
+            >
+              {sessionText}
+            </span>
+          )}
           {today && (
             <span title={`今日 ${formatCount(today.words)} 字`}>
               今日 {formatCountShort(today.words)}
@@ -1310,12 +1369,12 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
         <div
           className="paper"
           onDragOver={(e) => {
-            if (!e.dataTransfer.types.includes('application/x-bugu-sticky')) return
+            if (!isStickyDrag(e)) return
             e.preventDefault()
             e.dataTransfer.dropEffect = 'copy'
           }}
           onDrop={(e) => {
-            const cardPath = e.dataTransfer.getData('application/x-bugu-sticky')
+            const cardPath = stickyCardOf(e)
             if (!cardPath) return
             e.preventDefault()
             const card = [...stickies.values()].find((c) => c.path === cardPath)
@@ -1332,6 +1391,7 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
               onChange={onChange}
               onSaveRequest={() => void doSave(true)}
               onCaretMove={setCaret}
+              onEdit={(a, r) => setSession((c) => addEdit(c, a, r))}
               onSelectionChange={(r) => {
                 setSelection(r)
                 const path = docPathRef.current
@@ -1348,6 +1408,7 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
               externalRevision={externalRevision}
               revealRange={reveal}
               script={scriptView}
+              writing={writing}
               cast={cast.cast}
               insertRequest={insertReq}
               onContextMenu={openEditorMenu}
@@ -1634,6 +1695,8 @@ const TOOLS: Array<{ key: ToolTab; label: string; done: boolean; kinds?: BookKin
   { key: 'game', label: '游戏剧本', done: true, kinds: ['game'] },
   { key: 'trash', label: '回收站', done: true },
   { key: 'ai', label: 'AI 助手', done: true },
+  // 点它是开弹窗，不是切面板。见 ToolTab 上那段注释
+  { key: 'transfer', label: '导入 / 导出', done: true },
 ]
 
 function StatsPanel({
@@ -1715,9 +1778,6 @@ function StatsPanel({
         完整统计
       </button>
 
-      <div className="faint" style={{ fontSize: 11, marginTop: 10, lineHeight: 1.7 }}>
-        签到线 5000 字，每一万字可补签一天。
-      </div>
     </div>
   )
 }

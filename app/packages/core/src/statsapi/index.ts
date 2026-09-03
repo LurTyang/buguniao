@@ -168,6 +168,26 @@ export function checkHandle(raw: string): { ok: true; handle: string } | { ok: f
 }
 
 /**
+ * 一张奖状。
+ *
+ * **不是成就，不是里程碑。** 由作者手动发给人，纪念一件具体的事
+ * （某次征文、某个比赛）。客户端**只读**：拿到什么显示什么，
+ * 不判定、不发、不改。
+ *
+ * 它只出现在 `GET /me` 里，**不进公开接口** —— 「对外统计只发七个整数」
+ * 那句话要继续成立。
+ */
+export interface Award {
+  id: string
+  /** 显示出来的那 2–6 个字 */
+  name: string
+  /** 说明，鼠标停上去看。可能是空的 */
+  note: string
+  /** 什么时候发的（ISO） */
+  at: string
+}
+
+/**
  * 我自己那一份（`GET /api/v1/me`）。
  *
  * 跟公开接口**不是一个形状**：这儿的 `stats` 可能是 null ——
@@ -178,6 +198,8 @@ export interface MyProfile {
   handle: string
   updatedAt: string
   stats: PublicStats | null
+  /** 我拿到的奖状，先发的在前。没有就是空数组 */
+  awards: Award[]
 }
 
 function parseStats(body: unknown): PublicStats {
@@ -202,7 +224,26 @@ export function parseMyProfile(body: unknown): MyProfile {
     // 没推过时服务端给的是 null，别硬凑一个全 0 出来 ——
     // 「没推过」和「推过但今天 0 字」在界面上要说成两句不同的话
     stats: s && typeof s === 'object' ? parseStats(s) : null,
+    awards: parseAwards(o['awards']),
   }
+}
+
+/**
+ * 读奖状清单。
+ *
+ * **名字是空的就整条丢掉** —— 界面上那个位置要么有个看得清的词，
+ * 要么什么都别有。挂一个空白徽章比不挂更让人困惑。
+ */
+export function parseAwards(body: unknown): Award[] {
+  if (!Array.isArray(body)) return []
+  const out: Award[] = []
+  for (const raw of body) {
+    const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+    const name = str(o['name']).trim()
+    if (!name) continue
+    out.push({ id: str(o['id']), name, note: str(o['note']), at: str(o['at']) })
+  }
+  return out
 }
 
 /** 认领短名之后服务端回的那一句。它有可能把名字规范化过（大写转小写） */

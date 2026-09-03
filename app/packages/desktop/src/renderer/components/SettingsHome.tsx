@@ -12,6 +12,7 @@ import { SettingsOverlay, type SettingsSection } from './SettingsOverlay.js'
 import { PlanOverview } from './PlanPanel.js'
 import { ProviderSetup } from './AiPanel.js'
 import { AccountPanel } from './AccountPanel.js'
+import { AppearancePanel } from './SettingsPanel.js'
 import type { UserSettings } from '../../shared/api.js'
 
 type Report = Awaited<ReturnType<typeof api.planReport>>
@@ -74,6 +75,14 @@ export function SettingsHome({
                 onRename={() => setRenaming(true)}
               />
             ),
+          },
+          {
+            key: 'appearance',
+            label: '外观',
+            hint: '跟写作页侧边栏里的那一份是同一个设置 —— 两边改哪个都一样，改完立刻生效。',
+            // 作者要求两处都能改。抽的是同一个组件，不是复制两份代码 ——
+            // 复制的话改一处忘一处，两边就会不一样
+            node: <AppearancePanel settings={settings} onChange={onSettings} />,
           },
           {
             key: 'plan',

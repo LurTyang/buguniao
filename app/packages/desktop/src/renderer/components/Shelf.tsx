@@ -417,7 +417,7 @@ function IdeaModal({ onSave, onCancel }: { onSave(text: string): void; onCancel(
         <textarea
           ref={ref}
           className="idea-input"
-          placeholder="想到什么写什么。回头再决定它属于哪本书。"
+          placeholder="随意记录你的灵感吧。"
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {

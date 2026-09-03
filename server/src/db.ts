@@ -10,6 +10,7 @@
 
 import { DatabaseSync } from 'node:sqlite'
 import { toPublicJson, type PublicStats } from './stats.js'
+import { toAwardJson, type Award } from './awards.js'
 
 export interface Row extends PublicStats {
   handle: string
@@ -47,6 +48,24 @@ export class Store {
     `)
     // 公开接口按 handle 查，而且 handle 是大小写统一存小写的
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_users_handle ON users(handle)')
+
+    /*
+     * 奖状**单独一张表**，不塞进 users 里。
+     *
+     * 一是一个人可以有好几张；二是这两样东西的性质完全不同：
+     * 那七个数是客户端自己推上来的，奖状是人手动发的。
+     * 混在一张表里迟早会有人写一句 UPDATE 把两边一起动了。
+     */
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS awards (
+        sub  TEXT NOT NULL,
+        id   TEXT NOT NULL,
+        name TEXT NOT NULL,
+        note TEXT NOT NULL DEFAULT '',
+        at   TEXT NOT NULL,
+        PRIMARY KEY (sub, id)
+      )
+    `)
   }
 
   close(): void {
@@ -65,6 +84,14 @@ export class Store {
       .prepare('SELECT * FROM users WHERE handle = ?')
       .get(handle.toLowerCase()) as Record<string, unknown> | undefined
     return r ? toRow(r) : null
+  }
+
+  /** 短名对应的是谁。发奖状时要按短名找人，而奖状表是按 sub 存的 */
+  subOfHandle(handle: string): string | null {
+    const r = this.db.prepare('SELECT sub FROM users WHERE handle = ?').get(handle.toLowerCase()) as
+      | { sub: string }
+      | undefined
+    return r?.sub ?? null
   }
 
   bySub(sub: string): Row | null {
@@ -115,9 +142,53 @@ export class Store {
       )
   }
 
-  /** 退出/注销：把这个人的数据整个删掉。删得干净是本分 */
+  /**
+   * 退出/注销：把这个人的数据整个删掉。删得干净是本分。
+   *
+   * **奖状也一起删。** 「删干净」就该是删干净 —— 留着奖状等于
+   * 服务器上还认得这个人，那句承诺就打折了。
+   */
   forget(sub: string): void {
     this.db.prepare('DELETE FROM users WHERE sub = ?').run(sub)
+    this.db.prepare('DELETE FROM awards WHERE sub = ?').run(sub)
+  }
+
+  // ───────────────────────── 奖状 ─────────────────────────
+
+  /** 某个人的奖状，先发的在前 */
+  awardsOf(sub: string): Award[] {
+    const rows = this.db
+      .prepare('SELECT id, name, note, at FROM awards WHERE sub = ? ORDER BY at ASC, id ASC')
+      .all(sub) as Array<Record<string, unknown>>
+    return rows.map((r) =>
+      toAwardJson({
+        id: String(r['id'] ?? ''),
+        name: String(r['name'] ?? ''),
+        note: String(r['note'] ?? ''),
+        at: String(r['at'] ?? ''),
+      }),
+    )
+  }
+
+  /**
+   * 发一张奖状。同一个人同一个 id 就覆盖 —— 打错字了要能改回来。
+   *
+   * **不 ensure(sub)**：奖状可以先于那七个数存在（比赛发奖时对方
+   * 可能还没推过数），但也不该因此在 users 里凭空建一行。
+   */
+  grant(sub: string, a: Omit<Award, 'at'>, now: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO awards (sub, id, name, note, at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(sub, id) DO UPDATE SET name = excluded.name, note = excluded.note`,
+      )
+      .run(sub, a.id, a.name, a.note, now)
+  }
+
+  /** 撤回一张。返回真的删掉了没有 —— 发错人时要能确认撤对了 */
+  revoke(sub: string, id: string): boolean {
+    const r = this.db.prepare('DELETE FROM awards WHERE sub = ? AND id = ?').run(sub, id)
+    return Number(r.changes ?? 0) > 0
   }
 }
 

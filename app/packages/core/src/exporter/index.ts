@@ -11,6 +11,7 @@
  */
 
 import { stripAllAnchors } from '../foreshadow/index.js'
+import { scanAts, unescapeAt } from '../sticky/index.js'
 import { sanitizeFileName } from '../repository/index.js'
 import { formatScriptPlain, looksLikeScript, parseScript } from '../script/index.js'
 
@@ -39,9 +40,37 @@ export interface ExportOptions {
   chapterSeparator?: string
   /** 段落之间的分隔。默认一个空行 */
   paragraphSeparator?: string
+  /**
+   * 保留 Markdown 语法（标题的 `#`、粗体、引用、代码块……）。
+   *
+   * **导 md 时开，导 txt 时关。** 两档的用途是反的：
+   * md 是「原样搬走，换个编辑器接着写」，txt 是「排给人看」。
+   * 默认关 —— 这个函数原本就是给 txt 用的，默认值不该因为多了一档而变。
+   */
+  keepMarkdown?: boolean
+  /**
+   * 去掉便利贴的 `@` 标记。
+   *
+   * ⚠️ 这一条是 0.4 补的漏子：`renderBody()` 原来认得伏笔、双链、注释、
+   * Markdown 语法，**唯独没管 `@`** —— 于是导出给编辑的 txt 里，
+   * 行首那个 `@` 是原样带出去的。那不是「还没做的功能」，
+   * 是已有功能漏了一种标记。
+   *
+   * 去掉的是**标记本身，内容留着** —— `@表面身份：学徒` 里那句话
+   * 是正文的一部分，只有那个 `@` 不是。
+   */
+  stripFloatMarks?: boolean
+  /** 汉字与英文/数字之间补一个空格：`写了3000字` → `写了 3000 字` */
+  spaceBetweenCjkAndLatin?: boolean
+  /** 清理英文数字前后手滑打出来的多余空格 */
+  tidySpaces?: boolean
 }
 
 const DEFAULTS: Required<ExportOptions> = {
+  keepMarkdown: false,
+  stripFloatMarks: true,
+  spaceBetweenCjkAndLatin: false,
+  tidySpaces: false,
   scriptLayout: false,
   stripForeshadow: true,
   stripWikiLinks: true,
@@ -97,21 +126,122 @@ export function renderBody(body: string, options: ExportOptions = {}): string {
     s = s.replace(/\[\[([^\]]+)\]\]/g, '$1')
   }
 
-  // Markdown 语法转纯文本
-  s = s.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
-  s = s.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-  s = s.replace(/^[ \t]*#{1,6}[ \t]+/gm, '')
-  s = s.replace(/^[ \t]*>[ \t]?/gm, '')
-  s = s.replace(/(\*\*|__|~~)(.+?)\1/g, '$2')
-  s = s.replace(/(?<![\w\\])([*_])(?!\s)(.+?)(?<!\s)\1(?![\w])/g, '$2')
-  s = s.replace(/`([^`\n]+)`/g, '$1')
-  s = s.replace(/^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$/gm, '')
+  if (o.stripFloatMarks) s = stripFloatMarks(s)
+
+  /*
+   * Markdown 语法转纯文本。
+   *
+   * **导 md 时整块跳过。** md 那一档的用途是「原样搬走、换个编辑器接着写」，
+   * 把标题的 `#` 剥掉就搬不回来了。
+   */
+  if (!o.keepMarkdown) {
+    // Markdown 语法转纯文本
+    s = s.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    s = s.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    s = s.replace(/^[ \t]*#{1,6}[ \t]+/gm, '')
+    s = s.replace(/^[ \t]*>[ \t]?/gm, '')
+    s = s.replace(/(\*\*|__|~~)(.+?)\1/g, '$2')
+    s = s.replace(/(?<![\w\\])([*_])(?!\s)(.+?)(?<!\s)\1(?![\w])/g, '$2')
+    s = s.replace(/`([^`\n]+)`/g, '$1')
+    s = s.replace(/^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$/gm, '')
+  }
+
+  if (o.tidySpaces) s = tidySpaces(s)
+  if (o.spaceBetweenCjkAndLatin) s = spaceCjkLatin(s)
+
+  /*
+   * 分段。
+   *
+   * **md 那一档不重排段落** —— 它要的是原样，而重排会把作者精心留的
+   * 空行、列表、代码块全揉平。只有排给人看的 txt 才需要统一段距。
+   */
+  if (o.keepMarkdown) return s.trimEnd()
 
   // 分段：连续非空行算一段
   const paragraphs = splitParagraphs(s)
   const rendered = o.indentFirstLine ? paragraphs.map((p) => INDENT + p) : paragraphs
 
   return rendered.join(o.paragraphSeparator)
+}
+
+/**
+ * 去掉便利贴的 `@` 标记，**内容留着**。
+ *
+ * 三种写法（见 core/sticky）：
+ *   `@`                     单独一行的块标记 → 整行去掉
+ *   `@整行浮出`              行首一个 @      → 去掉那个 @
+ *   `年龄：@十七岁@，实为…`   行内成对        → 去掉那两个 @
+ *
+ * `\@` 是转义的字面量，要还原成 `@` 而不是删掉 ——
+ * 作者写 `lisi\@qq.com` 是想要一个真的 @。
+ *
+ * ⚠️ 这个函数是 0.4 补的漏子：`renderBody()` 原来认得伏笔、双链、注释、
+ * Markdown 语法，**唯独没管 `@`**，于是导给编辑的 txt 里行首那个 @
+ * 是原样带出去的。那不是「还没做的功能」，是已有功能漏了一种标记。
+ */
+export function stripFloatMarks(text: string): string {
+  const out: string[] = []
+  for (const line of text.split(/\r?\n/)) {
+    // 单独一行的块标记：整行去掉
+    if (line.trim() === '@') continue
+
+    const ats = scanAts(line)
+    let s = line
+    if (ats.length >= 2 && ats.length % 2 === 0) {
+      // 成对：两两配对，标记去掉、中间的字留着
+      let cut = ''
+      let last = 0
+      for (const at of ats) {
+        cut += s.slice(last, at)
+        last = at + 1
+      }
+      s = cut + s.slice(last)
+    } else if (ats.length === 1 && ats[0] === 0) {
+      // 行首一个：整行浮出，去掉标记留内容
+      s = s.slice(1)
+    }
+    // 剩下的（邮箱里那个、三个不成对的）一个都不动，
+    // 只把转义的还原成真的 @
+    out.push(unescapeAt(s))
+  }
+  return out.join('\n')
+}
+
+/** 中日韩汉字。用来判断「这儿要不要补个空格」 */
+const CJK_CLASS = '\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff\uf900-\ufaff'
+
+/**
+ * 汉字与英文/数字之间补一个空格。
+ *
+ * **只补汉字和「拉丁字母/数字」之间，不碰标点** ——
+ * `写了3000字。` 里那个句号后面不该冒出空格。
+ */
+export function spaceCjkLatin(text: string): string {
+  return text
+    .replace(new RegExp('([' + CJK_CLASS + '])([A-Za-z0-9])', 'g'), '$1 $2')
+    .replace(new RegExp('([A-Za-z0-9])([' + CJK_CLASS + '])', 'g'), '$1 $2')
+}
+
+/**
+ * 收掉手滑打出来的多余空格。
+ *
+ * **不碰行首**：行首空白可能是作者故意排的（诗、代码、剧本缩进）。
+ * 也不碰全角空格 —— 那是他主动敲的缩进，不是手滑。
+ */
+export function tidySpaces(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .map((line) => {
+      const indent = /^[ \t]*/.exec(line)?.[0] ?? ''
+      const rest = line
+        .slice(indent.length)
+        .replace(/[ \t]{2,}/g, ' ')
+        .replace(/[ \t]+([，。！？；：、）】」』》])/g, '$1')
+        .replace(/([（【「『《])[ \t]+/g, '$1')
+        .trimEnd()
+      return indent + rest
+    })
+    .join('\n')
 }
 
 /**

@@ -404,8 +404,6 @@ export function MilestonePanel({ bookPath, refreshKey }: { bookPath: string; ref
           {ms === null || ms.length === 0 ? (
             <div className="empty-hint">
               还没有里程碑。
-              <br />
-              「写完第一卷」「写完大纲-人物」这类，加上之后能看到还剩几天。
             </div>
           ) : (
             ms.map((m) => (

@@ -25,3 +25,10 @@ _测试数据/
 app/packages/desktop/out/
 app/packages/desktop/smoke.log
 app/packages/desktop/release/
+
+# 第三方主题（作者自己下载的，不进仓库 —— 各有各的授权）
+# 我们自己的模板在 主题模板/
+CSS/
+
+# 运维小工具，只在开发机上用，不进公开仓库
+server/tools/

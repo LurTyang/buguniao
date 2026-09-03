@@ -7,6 +7,9 @@ import {
   renderPerChapter,
   toDocxBlocks,
   previewExport,
+  stripFloatMarks,
+  spaceCjkLatin,
+  tidySpaces,
 } from './index.js'
 import type { ExportChapter } from './index.js'
 
@@ -360,5 +363,119 @@ describe('剧本排版导出', () => {
   it('一个字都不会丢', () => {
     const r = renderBody(SCRIPT, { scriptLayout: true })
     for (const must of ['李四推门进来', '你等很久了', '还好']) expect(r).toContain(must)
+  })
+})
+
+describe('0.4 · 导出的几档新选项', () => {
+  describe('@ 标记 —— 0.3 之前它是原样带出去的', () => {
+    it('【关键】行首那个 @ 去掉，那句话留着', () => {
+      expect(stripFloatMarks('@表面身份：城南药铺学徒')).toBe('表面身份：城南药铺学徒')
+    })
+
+    it('单独一行的 @ 整行去掉', () => {
+      expect(stripFloatMarks(['前', '@', '后'].join('\n'))).toBe(['前', '后'].join('\n'))
+    })
+
+    it('行内成对的两个 @ 都去掉，中间的字留着', () => {
+      expect(stripFloatMarks('年龄：@十七岁@，实为三百余岁')).toBe('年龄：十七岁，实为三百余岁')
+    })
+
+    it('【关键】邮箱里那个 @ 不许动 —— 它不在行首，也不成对', () => {
+      expect(stripFloatMarks('联系 lisi@qq.com')).toBe('联系 lisi@qq.com')
+    })
+
+    it('转义的 \@ 还原成真的 @，不是删掉', () => {
+      expect(stripFloatMarks('lisi\@qq.com')).toBe('lisi@qq.com')
+    })
+
+    it('三个 @ 不成对，一个都不动', () => {
+      expect(stripFloatMarks('@甲@乙@')).toBe('@甲@乙@')
+    })
+
+    it('默认就是去掉的 —— 发给编辑的稿子里不该有这个符号', () => {
+      expect(renderBody('@浮出的一句话')).toContain('浮出的一句话')
+      expect(renderBody('@浮出的一句话')).not.toContain('@')
+    })
+  })
+
+  describe('md 保留语法，txt 不保留', () => {
+    const src = '## 第一章\n\n他**站**在窗前。\n\n> 引一句'
+
+    it('txt 把 Markdown 剥成纯文字', () => {
+      const out = renderBody(src)
+      expect(out).not.toContain('##')
+      expect(out).not.toContain('**')
+      expect(out).not.toContain('>')
+      expect(out).toContain('第一章')
+    })
+
+    it('【关键】md 原样保留 —— 剥掉了就搬不回来了', () => {
+      const out = renderBody(src, { keepMarkdown: true })
+      expect(out).toContain('## 第一章')
+      expect(out).toContain('**站**')
+      expect(out).toContain('> 引一句')
+    })
+
+    it('md 不重排段落，也不加首行缩进', () => {
+      const out = renderBody('一段\n\n二段', { keepMarkdown: true, indentFirstLine: true })
+      expect(out).toBe('一段\n\n二段')
+    })
+
+    it('md 那一档照样能去标记 —— 保留语法跟保留标记是两回事', () => {
+      const out = renderBody('## 标题\n\n@浮出', { keepMarkdown: true, stripFloatMarks: true })
+      expect(out).toContain('## 标题')
+      expect(out).not.toContain('@')
+    })
+  })
+
+  describe('中英之间补空格', () => {
+    it('汉字和数字之间', () => {
+      expect(spaceCjkLatin('写了3000字')).toBe('写了 3000 字')
+    })
+
+    it('汉字和英文之间', () => {
+      expect(spaceCjkLatin('用Word打开')).toBe('用 Word 打开')
+    })
+
+    it('【关键】不碰标点 —— 句号后面不该冒出空格', () => {
+      expect(spaceCjkLatin('写了3000字。')).toBe('写了 3000 字。')
+      expect(spaceCjkLatin('他说：“好”')).toBe('他说：“好”')
+    })
+
+    it('本来就有空格的不再加', () => {
+      expect(spaceCjkLatin('写了 3000 字')).toBe('写了 3000 字')
+    })
+
+    it('纯中文、纯英文都不动', () => {
+      expect(spaceCjkLatin('他站在窗前')).toBe('他站在窗前')
+      expect(spaceCjkLatin('hello world')).toBe('hello world')
+    })
+
+    it('默认关着 —— 它会改变作者原本的排版', () => {
+      expect(renderBody('写了3000字')).toContain('写了3000字')
+    })
+  })
+
+  describe('收拾多余空格', () => {
+    it('连着的空格压成一个', () => {
+      expect(tidySpaces('他   站在窗前')).toBe('他 站在窗前')
+    })
+
+    it('中文标点前面不留空格', () => {
+      expect(tidySpaces('他站在窗前 。')).toBe('他站在窗前。')
+    })
+
+    it('行尾的空格去掉', () => {
+      expect(tidySpaces('他站在窗前   ')).toBe('他站在窗前')
+    })
+
+    it('【关键】行首的缩进不动 —— 那可能是他故意排的', () => {
+      expect(tidySpaces('    代码一行')).toBe('    代码一行')
+      expect(tidySpaces('\t缩进的')).toBe('\t缩进的')
+    })
+
+    it('全角空格不碰 —— 那是他主动敲的缩进', () => {
+      expect(tidySpaces('　　他站在窗前')).toBe('　　他站在窗前')
+    })
   })
 })
