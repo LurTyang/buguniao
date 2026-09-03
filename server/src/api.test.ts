@@ -58,7 +58,13 @@ beforeEach(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bugu-stats-'))
   store = new Store(path.join(dir, 'test.db'))
   const auth = new Auth({ issuer: ISSUER, audience: '', fetchImpl: fakeLogtoFetch() })
-  server = createServer({ store, auth, now: () => '2026-08-27T10:00:00.000Z' })
+  server = createServer({
+    store,
+    auth,
+    now: () => '2026-08-27T10:00:00.000Z',
+    // 只有 boss 能发奖。别的 sub 走到那条路由上应该像没这个接口一样
+    admins: new Set(['boss']),
+  })
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
 })
@@ -332,5 +338,150 @@ describe('杂项', () => {
   it('请求体太大要拦下来', async () => {
     const r = await call('/api/v1/me/stats', asUser('u1', { method: 'PUT', body: 'x'.repeat(20000) }))
     expect(r.status).toBe(400)
+  })
+})
+
+describe('奖状', () => {
+  const grant = (who: string, body: unknown) =>
+    call('/api/v1/admin/awards', asUser(who, { method: 'PUT', body: JSON.stringify(body) }))
+
+  it('发一张，本人在 /me 里看得见', async () => {
+    await setUp('u1', 'mingting')
+    const r = await grant('boss', { handle: 'mingting', name: '不咕之星', id: 'nano-2026', note: '一等奖' })
+    expect(r.status).toBe(200)
+
+    const me = await (await call('/api/v1/me', asUser('u1'))).json()
+    expect(me.awards).toHaveLength(1)
+    expect(me.awards[0]).toMatchObject({ id: 'nano-2026', name: '不咕之星', note: '一等奖' })
+    expect(me.awards[0].at).toBe('2026-08-27T10:00:00.000Z')
+  })
+
+  it('【关键】奖状不进公开接口 —— 那儿仍旧只有那七个数', async () => {
+    await setUp('u1', 'mingting')
+    await grant('boss', { handle: 'mingting', name: '不咕之星', id: 'nano-2026' })
+
+    const pub = await (await call('/api/v1/u/mingting/stats')).json()
+    expect(pub.awards).toBeUndefined()
+    expect(JSON.stringify(pub)).not.toContain('不咕之星')
+    expect(Object.keys(pub).sort()).toEqual(
+      ['bestStreak', 'dailyFloor', 'date', 'daysTogether', 'handle', 'streak', 'todayWords', 'updatedAt', 'weekWords'].sort(),
+    )
+  })
+
+  it('【关键】不在名单上的人，这个接口就像不存在', async () => {
+    await setUp('u1', 'mingting')
+    const r = await grant('u1', { handle: 'mingting', name: '自封冠军', id: 'self' })
+    expect(r.status).toBe(404)
+    expect(await r.text()).not.toContain('管理员')
+
+    const me = await (await call('/api/v1/me', asUser('u1'))).json()
+    expect(me.awards).toEqual([])
+  })
+
+  it('【关键】没带令牌一样发不了', async () => {
+    await setUp('u1', 'mingting')
+    const r = await call('/api/v1/admin/awards', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ handle: 'mingting', name: '冠军', id: 'x' }),
+    })
+    expect(r.status).toBe(401)
+  })
+
+  it('发给一个不存在的短名要明说 —— 发错人比发不出去麻烦', async () => {
+    const r = await grant('boss', { handle: 'nobody-here', name: '冠军', id: 'x' })
+    expect(r.status).toBe(404)
+    expect(await r.text()).toContain('nobody-here')
+  })
+
+  it('同一个 id 再发一次是改，不是多出来一张', async () => {
+    await setUp('u1', 'mingting')
+    await grant('boss', { handle: 'mingting', name: '亚军', id: 'nano-2026' })
+    await grant('boss', { handle: 'mingting', name: '冠军', id: 'nano-2026', note: '改过来了' })
+
+    const me = await (await call('/api/v1/me', asUser('u1'))).json()
+    expect(me.awards).toHaveLength(1)
+    expect(me.awards[0].name).toBe('冠军')
+    expect(me.awards[0].note).toBe('改过来了')
+  })
+
+  it('撤得回来', async () => {
+    await setUp('u1', 'mingting')
+    await grant('boss', { handle: 'mingting', name: '冠军', id: 'nano-2026' })
+
+    const r = await call(
+      '/api/v1/admin/awards',
+      asUser('boss', { method: 'DELETE', body: JSON.stringify({ handle: 'mingting', id: 'nano-2026' }) }),
+    )
+    expect(r.status).toBe(200)
+    expect((await r.json()).removed).toBe(true)
+
+    const me = await (await call('/api/v1/me', asUser('u1'))).json()
+    expect(me.awards).toEqual([])
+  })
+
+  it('撤一张本来就没有的，说清楚没删着，不假装成功', async () => {
+    await setUp('u1', 'mingting')
+    const r = await call(
+      '/api/v1/admin/awards',
+      asUser('boss', { method: 'DELETE', body: JSON.stringify({ handle: 'mingting', id: 'nope' }) }),
+    )
+    expect((await r.json()).removed).toBe(false)
+  })
+
+  it('奖名不合规矩时当场拒，并说清为什么', async () => {
+    await setUp('u1', 'mingting')
+    const r = await grant('boss', { handle: 'mingting', name: '一二三四五六七', id: 'x' })
+    expect(r.status).toBe(400)
+    expect(await r.text()).toContain('个字')
+  })
+
+  it('一个人可以有好几张，按发的先后排', async () => {
+    await setUp('u1', 'mingting')
+    await grant('boss', { handle: 'mingting', name: '冠军', id: 'b-second' })
+    await grant('boss', { handle: 'mingting', name: '亚军', id: 'a-first' })
+
+    const me = await (await call('/api/v1/me', asUser('u1'))).json()
+    expect(me.awards.map((a: { id: string }) => a.id)).toEqual(['a-first', 'b-second'])
+  })
+
+  it('【关键】「删掉服务器上的我」连奖状一起删干净', async () => {
+    await setUp('u1', 'mingting')
+    await grant('boss', { handle: 'mingting', name: '冠军', id: 'nano-2026' })
+
+    await call('/api/v1/me', asUser('u1', { method: 'DELETE' }))
+
+    const me = await (await call('/api/v1/me', asUser('u1'))).json()
+    expect(me.awards).toEqual([])
+    expect(me.handle).toBe('')
+  })
+
+  it('没推过数的人也看得见自己的奖状栏（空的）', async () => {
+    const me = await (await call('/api/v1/me', asUser('fresh'))).json()
+    expect(me.awards).toEqual([])
+  })
+})
+
+describe('管理接口读清单那条路', () => {
+  it('管理员能看某个人现在有哪些', async () => {
+    await setUp('u1', 'mingting')
+    await call('/api/v1/admin/awards', asUser('boss', { method: 'PUT', body: JSON.stringify({ handle: 'mingting', name: '冠军', id: 'x' }) }))
+
+    const r = await call('/api/v1/admin/awards?handle=mingting', asUser('boss'))
+    expect(r.status).toBe(200)
+    const j = await r.json()
+    expect(j.handle).toBe('mingting')
+    expect(j.awards).toHaveLength(1)
+  })
+
+  it('【关键】不在名单上的人读不到别人的奖状 —— 那是隐私', async () => {
+    await setUp('u1', 'mingting')
+    const r = await call('/api/v1/admin/awards?handle=mingting', asUser('u1'))
+    expect(r.status).toBe(404)
+  })
+
+  it('读一个不存在的短名，说得清楚', async () => {
+    const r = await call('/api/v1/admin/awards?handle=nobody-here', asUser('boss'))
+    expect(r.status).toBe(404)
   })
 })

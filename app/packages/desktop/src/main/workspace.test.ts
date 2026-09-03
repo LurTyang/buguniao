@@ -175,18 +175,45 @@ describe('todayProgress', () => {
 
     const p = await ws.todayProgress(book)
     expect(p.words).toBe(1234)
-    expect(p.signedIn).toBe(false)
-    expect(p.wordsToSignIn).toBe(5000 - 1234)
   })
 
-  it('写够 5000 字算签到', async () => {
+  /**
+   * 0.4 改的：签到线**跟着作者设的每日底线走**，不再是写死的 5000。
+   *
+   * 原来是两条线并存 —— 计划里判「今天达标没」用的是底线，
+   * 而连胜/签到用的是常量 5000。作者在计划里把目标改成 2000，
+   * 稿纸右上角却始终写着「还差 5,000」，怎么改都不动。
+   */
+  it('【关键】签到线跟着每日底线走，不是写死的 5000', async () => {
     const { book, chapter } = await newBookWithChapter()
+    // 默认档是「业余」：工作日 1000、休息日 2000，两种都远小于 5000
+    await ws.saveDoc(chapter, '字'.repeat(1))
+    const before = await ws.todayProgress(book)
+    expect(before.signInWords).toBeLessThan(5000)
+    expect(before.signInWords).toBeGreaterThan(0)
+    expect(before.wordsToSignIn).toBe(before.signInWords - 1)
+    expect(before.signedIn).toBe(false)
+  })
+
+  it('写够那条线就算签到', async () => {
+    const { book, chapter } = await newBookWithChapter()
+    // 6000 比默认档任何一天的底线都高，星期几都成立
     await ws.saveDoc(chapter, '字'.repeat(6000))
 
     const p = await ws.todayProgress(book)
     expect(p.signedIn).toBe(true)
     expect(p.wordsToSignIn).toBe(0)
     expect(p.streak).toBe(1)
+  })
+
+  it('改了每日目标，签到线跟着改', async () => {
+    const { book, chapter } = await newBookWithChapter()
+    await ws.setPlanTarget({ floor: [300, 300, 300, 300, 300, 300, 300], ideal: [600, 600, 600, 600, 600, 600, 600] })
+    await ws.saveDoc(chapter, '字'.repeat(350))
+
+    const p = await ws.todayProgress(book)
+    expect(p.signInWords).toBe(300)
+    expect(p.signedIn).toBe(true)
   })
 })
 

@@ -11,7 +11,8 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import * as path from 'node:path'
 import { writeFileSync } from 'node:fs'
 import * as fsp from 'node:fs/promises'
-import { loadConfig, patchConfig } from './config.js'
+import { loadConfig, patchConfig, type ThemeSlot } from './config.js'
+import { canAdd, putSlot, removeSlot, normalizeSlots } from '../shared/theme-slots.js'
 import { Workspace } from './workspace.js'
 import { isWritableDir } from '../storage/local-fs.js'
 import { makeSmokeRoot, runSmoke } from './smoke.js'
@@ -34,6 +35,10 @@ import {
   startAutoPush,
 } from './stats-push.js'
 import { resolveProxy } from './net.js'
+import { resolveThemeCss } from './theme-css.js'
+import { nameFromCss, nameFromFile, paperColorOf } from './theme-name.js'
+import { draftCss, safeFileName, type ThemeDraft } from '../shared/theme-draft.js'
+import { FONT_EXTS, fontDataUrl, importFont, removeFont } from './fonts.js'
 import { planFolder, planScrivener } from './foreign.js'
 import { buildAppMenu } from './menu.js'
 import {
@@ -60,7 +65,7 @@ import {
   exportTxt,
   previewImport,
 } from './transfer.js'
-import type { StatsState } from '../shared/api.js'
+import type { AwardChoice, StatsState } from '../shared/api.js'
 
 /** `--smoke` 模式：跑一遍端到端流程后自动退出。见 smoke.ts */
 const SMOKE = process.argv.includes('--smoke')
@@ -73,12 +78,16 @@ const SMOKE = process.argv.includes('--smoke')
  */
 const MAX_THEME_CSS = 2 * 1024 * 1024
 
-async function readThemeCssFile(file: string): Promise<string> {
+async function readThemeCssFile(
+  file: string,
+): Promise<{ css: string; problems: string[]; bridged: number }> {
   const stat = await fsp.stat(file)
   if (stat.size > MAX_THEME_CSS) {
     throw new Error(`这份 CSS 有 ${Math.round(stat.size / 1024)} KB，太大了，装上去界面会卡。`)
   }
-  return await fsp.readFile(file, 'utf8')
+  // 不能原样读 —— `@import` 和相对 url() 都要按**这个文件自己的位置**解析。
+  // 内联 <style> 里的相对路径是相对页面算的，不处理的话整份主题静默失效
+  return await resolveThemeCss(file)
 }
 
 /** 产物目录（out/main）。主进程打包为 CommonJS，所以 __dirname 可用 */
@@ -202,7 +211,7 @@ function registerIpc(): void {
    * 只挑，不读 —— 读是 `readThemeCss` 的事。分开是因为每次启动都要读一遍，
    * 但只有换的时候才需要弹文件框。
    */
-  handle('pickThemeCss', async () => {
+  handle('pickThemeCss', async (slot: number) => {
     const r = await dialog.showOpenDialog({
       title: '选择一份主题 CSS（Typora 的主题可以直接用）',
       properties: ['openFile'],
@@ -213,20 +222,263 @@ function registerIpc(): void {
     // 先读一遍确认能读、不是个巨大的东西，再存进配置 ——
     // 存了一个读不出来的路径，界面上只会莫名其妙地没效果
     await readThemeCssFile(picked)
-    await patchConfig({ themeCss: picked })
-    return picked
+
+    const cfg = await loadConfig()
+
+    /*
+     * 名字和颜色在**导入时就算好存下来**，不是每次画色块再去读一遍 CSS ——
+     * 书架每次打开都要画那排色块，为它读几个几百 KB 的文件不划算。
+     */
+    const got = await readThemeCssFile(picked)
+    const one: ThemeSlot = {
+      path: picked,
+      draft: null,
+      name: nameFromCss(got.css, picked),
+      color: paperColorOf(got.css),
+    }
+    /*
+     * `slot` 指着已有的那一格就覆盖（双击换一份 CSS 走这条），
+     * 别的情况一律占用末尾那个空位 —— 而占用之后表会自己再长一个空位出来。
+     * 「无限添加」就是这么来的：空位本身就是「加」这个按钮。
+     */
+    const r2 = putSlot(cfg.themeCssSlots, slot, one)
+    if (r2.at < 0) throw new Error('自定义主题最多九个了。删掉一个再加。')
+    await patchConfig({ themeCssSlots: r2.slots, themeCssActive: r2.at })
+    return { slot: r2.at, slots: r2.slots }
   })
 
-  /** 读那份 CSS 的内容。文件没了/删了就当没配，不拦着启动 */
+  /** 给某个槽位改名。名字是给人看的，作者当然要能改 */
+  handle('renameThemeSlot', async (slot: number, name: string) => {
+    const cfg = await loadConfig()
+    const slots = normalizeSlots(cfg.themeCssSlots)
+    const one = slots[slot]
+    if (one && (one.path || one.draft)) {
+      /*
+       * 空名字要退回一个能认出来的名字，别留个没名字的色块。
+       * 文件主题退回文件名；自制主题退回它草稿里那个名字。
+       */
+      const trimmed = name.trim()
+      const fallback = one.path ? nameFromFile(one.path) : (one.draft?.name ?? '我的主题')
+      slots[slot] = { ...one, name: trimmed || fallback }
+      await patchConfig({ themeCssSlots: slots })
+    }
+    return slots
+  })
+
+  /** 换一个槽位（或 -1 = 不用自选样式）。不发文件框，就是切一下 */
+  handle('useThemeSlot', async (slot: number) => {
+    await patchConfig({ themeCssActive: slot })
+    return slot
+  })
+
+  /**
+   * 删掉某一格。正在用它就切回预设，删的是它前面的就把序号往前挪。
+   *
+   * **删的是整格，不是把它清空** —— 清空会在中间留个洞，
+   * 而那个洞看起来跟末尾的空位一模一样，点下去却是另一回事。
+   */
+  handle('clearThemeSlot', async (slot: number) => {
+    const cfg = await loadConfig()
+    const r = removeSlot(cfg.themeCssSlots, slot, cfg.themeCssActive)
+    await patchConfig({ themeCssSlots: r.slots, themeCssActive: r.active })
+    return r
+  })
+
+  /**
+   * 把自己调的那套存进栏位。
+   *
+   * `slot` 给 -1 = 加一份新的。满九个了返回 null ——
+   * **不挤掉最老的那一份**，那是别人调了半天的配色。
+   */
+  handle('saveThemeToSlot', async (slot: number, draft: ThemeDraft) => {
+    const cfg = await loadConfig()
+    if (slot < 0 && !canAdd(cfg.themeCssSlots)) return null
+    const one: ThemeSlot = {
+      path: '',
+      draft,
+      name: draft.name.trim() || '我的主题',
+      // 自制主题的纸色是现成的，不用去 CSS 里抠
+      color: draft.vars['--bg-color'] ?? '',
+    }
+    const r = putSlot(cfg.themeCssSlots, slot, one)
+    if (r.at < 0) return null
+    await patchConfig({ themeCssSlots: r.slots, themeCssActive: r.at, themeDraft: draft })
+    return { slot: r.at, slots: r.slots }
+  })
+
+  /**
+   * 读那份 CSS 的内容。
+   *
+   * **读不到要说清楚是哪一种读不到**，别静默当没配 ——
+   * 0.3 就是静默的，于是作者看到的是「我明明选了主题，怎么一点变化没有」，
+   * 而真实原因可能是他把那个文件删了、或者那份 CSS 里根本没有 `#write`。
+   *
+   * 文件没了不拦着启动，但要把话带回界面上。
+   */
   handle('readThemeCss', async () => {
-    const p = (await loadConfig()).themeCss
-    if (!p) return ''
+    const cfg = await loadConfig()
+    /*
+     * 用哪一份：看当前槽位。
+     *
+     * 0.4 之前只有一个 `themeCss`，把它搬进槽位 0 —— 老用户升级之后
+     * 那份主题该还在，而不是「怎么没了」。
+     */
+    /*
+     * 自己调的那套排在最前面。
+     *
+     * 它跟三个文件槽位是**并列的一档**，不是第四个槽位 ——
+     * 开着的时候文件槽位一律让位。这样「用哪一份主题」永远只有一个答案，
+     * 不会出现两份 CSS 同时注进页面、互相压来压去的局面
+     * （作者早先报过「自选样式疑似仍然可以和预设样式一同存在」）。
+     */
+    const slots = normalizeSlots(cfg.themeCssSlots)
+    const one = cfg.themeCssActive >= 0 ? slots[cfg.themeCssActive] : undefined
+
+    /*
+     * 自制主题：直接出片，不碰硬盘。
+     *
+     * 它跟导入的文件占同样的格子，所以这里只是**同一条路上的一个岔口** ——
+     * 界面那边完全不用管当前这格是哪一种。
+     */
+    if (one?.draft) {
+      return {
+        css: draftCss(one.draft),
+        path: '',
+        problem: '',
+        bridged: 0,
+        paper: one.draft.vars['--bg-color'] ?? '',
+      }
+    }
+
+    const p = one?.path ?? ''
+    if (!p) return { css: '', path: '', problem: '', bridged: 0, paper: '' }
     try {
-      return await readThemeCssFile(p)
-    } catch {
-      return ''
+      const r = await readThemeCssFile(p)
+      /*
+       * 报什么问题，按严重程度挑一条说。
+       *
+       * ⚠️ **「没有 #write」不再当成错**。作者那份 phycat-mint.css 里
+       * 一个 #write 都没有 —— 它整份内容都在被 @import 的文件里。
+       * 拿这个当判据会把好主题误判成坏的，比不判还糟。
+       * 真正该报的是「有个文件没找着」。
+       */
+      /*
+       * 「装上了但看不出变化」是这功能最难自查的一种坏法 ——
+       * 作者那边只有「没变」两个字，什么线索都没有。
+       *
+       * 所以**把实际装进去了什么原样报出来**：多大、有没有改稿纸的规则、
+       * 有没有定义颜色变量。这三件事一说，是「文件缺了」还是
+       * 「这份主题本来就只改了别的地方」当场就分得开。
+       */
+      const kb = Math.round(r.css.length / 1024)
+      /*
+       * **逐个点名**：这份 CSS 到底定义了哪几个 Typora 标准变量。
+       *
+       * 只说「装进去 N KB」不够 —— 作者报了三次「还是没变」，
+       * 每一次我都只能猜是哪一环断了。而「它定义了 --primary-color，
+       * 没定义 --bg-color」这一句话，直接就把范围收死了。
+       */
+      const WANT = [
+        '--bg-color',
+        '--text-color',
+        '--side-bar-bg-color',
+        '--primary-color',
+        '--window-border',
+        '--control-text-color',
+      ]
+      /*
+       * ⚠️ 这里必须是两个反斜杠。
+       *
+       * 普通字符串里的 `\s` 不是「空白」，是**一个字母 s** ——
+       * 正则就成了 `--bg-colors*:`，一辈子匹配不上，于是这句提示
+       * 永远在说「一个标准颜色变量都没定义」，把好主题也报成坏的。
+       * 踩过第三次了，钉在这儿。
+       */
+      const has = WANT.filter((n) => new RegExp(n + '\\s*:', 'i').test(r.css))
+      const missing = WANT.filter((n) => !has.includes(n))
+      /*
+       * 翻译了多少条也要说。
+       *
+       * Typora 主题里七成规则打向 h1/blockquote 这些真元素，我们把它们
+       * 翻到了稿纸的行类上（见 main/theme-css.ts）。翻了几条，直接决定
+       * 这份主题在不咕鸟里能还原多少 —— 作者该看得见这个数。
+       */
+      const bridged = r.bridged > 0 ? `翻译了 ${r.bridged} 条排版规则，` : ''
+      const facts =
+        `装进去 ${kb} KB，` +
+        bridged +
+        (r.css.includes('#write') ? '有 #write 规则，' : '没有 #write 规则，') +
+        (has.length > 0 ? `定义了 ${has.join('、')}` : '一个标准颜色变量都没定义') +
+        (missing.length > 0 && has.length > 0 ? `；缺 ${missing.join('、')}` : '') +
+        '。'
+
+      /*
+       * ⚠️ **这一栏是红的。所以只有真出事了才填。**
+       *
+       * 作者截图报的就是这个：主题明明装好了（稿纸都变成薄荷色了），
+       * 设置里却顶着一大段红字，而且「翻译了 62 条」说了两遍 ——
+       * 一次来自这儿，一次来自界面那边算的回执。
+       *
+       * 于是分工定死：
+       *   · 这儿（红字）只说**坏消息**：文件缺了，或者装了等于没装。
+       *   · 正常情况下的「装进去多少、改了几个颜色、翻了几条」，
+       *     由界面那边用普通颜色说一行 —— 那是回执，不是警告。
+       *
+       * 「只改到一两个颜色」不算坏消息：phycat 那种主题本来就只定义
+       * --primary-color，纸色靠 #write::before 铺、排版靠翻译。
+       * 拿变量个数去判它好坏，判出来的是错的。
+       */
+      const problem =
+        r.problems.length > 0
+          ? `${r.problems.join('　')}（${facts}）`
+          : has.length === 0 && r.bridged === 0
+            ? facts +
+              '这份 CSS 既没定义颜色变量，也没有能翻译的排版规则 —— 它多半只改了 Typora 自己的界面。'
+            : ''
+      /*
+       * 纸色单独报一份。
+       *
+       * 作者问的是「稿纸颜色仍未更改，是不是有个带纸色的文件没导进来」——
+       * 不是。整份 70 KB 都在，只是这份主题**根本没有纸色**：
+       * 它一个标准颜色变量都不定义，唯一碰到底色的是
+       * `body{background:transparent}`，纸在 Typora 里也是白的。
+       *
+       * 这种事必须**说出来**，不然只能靠猜是哪一环断了。
+       */
+      return { css: r.css, path: p, problem, bridged: r.bridged, paper: paperColorOf(r.css) }
+    } catch (e) {
+      const why = e instanceof Error ? e.message : String(e)
+      // ENOENT 说人话：文件被删了/被移走了
+      const gone = /ENOENT|no such file/i.test(why)
+      return {
+        css: '',
+        path: p,
+        problem: gone ? `找不到这个文件了：${p}` : `读不了这份 CSS：${why}`,
+        bridged: 0,
+        paper: '',
+      }
     }
   })
+  /**
+   * 把自己调的那套导出成一份 .css。
+   *
+   * 为什么要有这个：调色器存的是**值**（存在配置里，随时能接着改），
+   * 而导出的是**文件**（给别人、备份、或者拿去手改）。两件事分开。
+   *
+   * 生成的文件跟我们认得的格式完全一致 —— 也就是说导出的这份，
+   * 用「自选样式」再导回来是能用的。
+   */
+  handle('exportThemeCss', async (draft: ThemeDraft) => {
+    const r = await dialog.showSaveDialog({
+      title: '把这套主题导出到',
+      defaultPath: `${safeFileName(draft.name)}.css`,
+      filters: [{ name: '样式表', extensions: ['css'] }],
+    })
+    if (r.canceled || !r.filePath) return null
+    await fsp.writeFile(r.filePath, draftCss(draft), 'utf8')
+    return r.filePath
+  })
+
   handle('createVolume', async (b: string, t: string) => (await getWorkspace()).createVolume(b, t))
   handle('renameDoc', async (p: string, t: string) => (await getWorkspace()).renameDoc(p, t))
   handle('renameVolume', async (p: string, t: string) => (await getWorkspace()).renameVolume(p, t))
@@ -300,6 +552,64 @@ function registerIpc(): void {
   // ── 导出 ──
   handle('collectForExport', async (b: string) => (await getWorkspace()).collectForExport(b))
   handle('exportPreview', async (chapters: any, options: any) => exportPreview(chapters, options))
+  /**
+   * 一次把选中的几部分都导出去。
+   *
+   * 选了不止一部分就导成一个文件夹，每部分一个文件 ——
+   * 设定集拼在正文后面发给编辑，那是帮倒忙。
+   */
+  handle('exportBundle', async (bookPath: string, opts: any, title: string) => {
+    const ws = await getWorkspace()
+    const parts: Array<{ name: string; chapters: any[] }> = []
+
+    if (opts.parts.text) parts.push({ name: '正文', chapters: await ws.collectForExport(bookPath) })
+    const extras = await ws.collectExtras(bookPath, {
+      outline: opts.parts.outline,
+      settings: opts.parts.settings,
+    })
+    if (opts.parts.outline && extras.outline.length > 0)
+      parts.push({ name: '大纲', chapters: extras.outline })
+    if (opts.parts.settings && extras.settings.length > 0)
+      parts.push({ name: '设定集', chapters: extras.settings })
+
+    if (parts.length === 0) throw new Error('一部分都没选，没什么可导的。')
+
+    const ext = opts.format === 'md' ? 'md' : 'txt'
+    // md 保留语法、不加缩进；txt 排给人看。两档的默认值是反的
+    const options = {
+      ...opts.options,
+      keepMarkdown: opts.format === 'md',
+      ...(opts.format === 'md' ? { indentFirstLine: false } : {}),
+    }
+
+    // 只有一部分就直接存成一个文件，别为一份稿子造一个文件夹
+    if (parts.length === 1) {
+      const r = await dialog.showSaveDialog({
+        title: '导出到',
+        defaultPath: `${title}-${parts[0]!.name}.${ext}`,
+        filters: [{ name: ext.toUpperCase(), extensions: [ext] }],
+      })
+      if (r.canceled || !r.filePath) return null
+      await exportTxt({ chapters: parts[0]!.chapters, options, target: r.filePath })
+      return { files: 1, dir: r.filePath }
+    }
+
+    const r = await dialog.showOpenDialog({
+      title: '选择导出到哪个文件夹',
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    if (r.canceled || r.filePaths.length === 0) return null
+    const dir = path.join(r.filePaths[0] as string, `${title}-导出`)
+    for (const part of parts) {
+      await exportTxt({
+        chapters: part.chapters,
+        options,
+        target: path.join(dir, `${part.name}.${ext}`),
+      })
+    }
+    return { files: parts.length, dir }
+  })
+
   handle('exportBook', async (kind: string, chapters: any, options: any, title: string) => {
     if (kind === 'perChapter') {
       const r = await dialog.showOpenDialog({
@@ -461,19 +771,40 @@ function registerIpc(): void {
       autoError: autoPushError(),
     }
     const signedIn = (await loginState(LOGTO)).signedIn
-    // 没登录就不发请求 —— 发出去也只会拿回一个 401，白等一趟
+    // 没登录就不发请求 —— 发出去也只会拿回一个 401，白等一趟。
+    // 奖状给本地缓存那一份：拿到手的东西不该因为没登录就从界面上消失
     if (!signedIn) {
-      return { signedIn, handle: '', updatedAt: '', stats: null, publicUrl: '', ...local }
+      return {
+        signedIn,
+        handle: '',
+        updatedAt: '',
+        stats: null,
+        publicUrl: '',
+        awards: cfg.statsAwards,
+        ...local,
+      }
     }
     const me = await myProfile(await proxyNow())
+    // 读到了就刷新本地那一份，离线时还看得见
+    await patchConfig({ statsAwards: me.awards })
     return {
       signedIn: true,
       handle: me.handle,
       updatedAt: me.updatedAt,
       stats: me.stats,
       publicUrl: me.handle ? publicUrlOf(me.handle) : '',
+      awards: me.awards,
       ...local,
     }
+  }
+
+  /**
+   * 书架上挂哪一张奖状。**只读本机缓存，不发请求** ——
+   * 书架每次打开都要用它，不该每次都等一趟网络。
+   */
+  const awardChoice = async (): Promise<AwardChoice> => {
+    const cfg = await loadConfig()
+    return { awards: cfg.statsAwards, pinned: cfg.statsAwardPinned }
   }
 
   handle('statsMe', async () => statsState())
@@ -501,6 +832,11 @@ function registerIpc(): void {
   })
   handle('statsPublic', async (handleName: string) => readPublic(handleName, await proxyNow()))
   handle('statsPreview', async () => collectStats())
+  handle('myAwards', async () => awardChoice())
+  handle('pinAward', async (id: string) => {
+    await patchConfig({ statsAwardPinned: id })
+    return awardChoice()
+  })
   handle('setNickname', async (n: string) => (await getWorkspace()).setNickname(n))
   handle('setPlanTarget', async (t: any) => (await getWorkspace()).setPlanTarget(t))
   handle('setLeave', async (d: string, r: string | null) => (await getWorkspace()).setLeave(d, r))
@@ -576,7 +912,17 @@ let smokeRoot: string | null = null
 // 否则跑一次冒烟就会把作者真实的设置（作品根目录、AI 配置）覆盖掉，
 // 而且上一次冒烟留下的配置还会让这一次的断言时灵时不灵。
 // setPath 必须在 app ready 之前调用。
-if (SMOKE) app.setPath('userData', makeSmokeRoot())
+if (SMOKE) {
+  /*
+   * 冒烟不许碰作者真实的应用数据 —— 它会改配置、建索引、写令牌文件。
+   * 所以整个 userData 指到一个临时目录去。
+   *
+   * `BUGU_SMOKE_USERDATA` 是给「拿一份特定配置跑一遍」用的：
+   * 比如验证老配置的迁移 —— 那种事只在升级的人那儿发生，
+   * 干净目录里永远试不出来。
+   */
+  app.setPath('userData', process.env['BUGU_SMOKE_USERDATA'] || makeSmokeRoot())
+}
 
 void app.whenReady().then(async () => {
   if (SMOKE) {

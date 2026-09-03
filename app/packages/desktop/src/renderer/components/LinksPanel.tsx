@@ -121,9 +121,7 @@ export function LinksPanel({
         )}
       </div>
 
-      <div className="fs-hint">
-        关联是从索引里读的。刚写的链接要等这一篇存下之后才会出现。
-      </div>
+      <div className="fs-hint">关联需保存后刷新才会出现。</div>
     </div>
   )
 }

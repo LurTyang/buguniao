@@ -67,8 +67,6 @@ export function TrashPanel({
       ) : items.length === 0 ? (
         <div className="empty-hint">
           回收站是空的。
-          <br />
-          删掉的章节、设定、灵感都会先到这里。
         </div>
       ) : (
         <>

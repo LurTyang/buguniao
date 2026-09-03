@@ -87,15 +87,35 @@ function StickyNote({
   const [live, setLive] = useState<Partial<PinnedSticky> | null>(null)
   const box = { ...pin, ...live }
 
+  /**
+   * 拖动 / 缩放。
+   *
+   * ⚠️ **用指针捕获，不要用 mousedown + window 上挂临时监听。**
+   *
+   * 作者报的「标签拖入后无法拖动，需要缩放一次再打开才可拖动」就是这么来的：
+   * 便利贴是刚从目录树 HTML5 拖放过来的，那一趟拖放结束之后浏览器不一定
+   * 立刻退出拖动状态 —— 而拖动状态下 window 上的 mousemove **根本不投递**，
+   * 于是按下去能按住、就是不动。折叠展开一次（或者重开软件）之后，
+   * 中间隔了别的交互，状态清了，又好了。
+   *
+   * setPointerCapture 把后续事件锁在这个元素上，不看文档处于什么状态；
+   * 侧边栏那个宽度手柄早就因为同样的道理改成这样了，这儿是补上。
+   */
   const startDrag = useCallback(
-    (e: React.MouseEvent, mode: 'move' | 'resize') => {
+    (e: React.PointerEvent, mode: 'move' | 'resize') => {
       e.preventDefault()
       e.stopPropagation()
+      const handle = e.currentTarget as HTMLElement
+      try {
+        handle.setPointerCapture(e.pointerId)
+      } catch {
+        /* 捕获不到就退化成普通事件，拖出元素可能松脱，但至少能拖 */
+      }
       const originX = e.clientX
       const originY = e.clientY
       const start = { x: pin.x, y: pin.y, w: pin.w, h: pin.h }
 
-      const onMove = (ev: MouseEvent) => {
+      const onMove = (ev: PointerEvent) => {
         const dx = ev.clientX - originX
         const dy = ev.clientY - originY
         if (mode === 'move') {
@@ -112,16 +132,18 @@ function StickyNote({
       }
 
       const onUp = () => {
-        window.removeEventListener('mousemove', onMove)
-        window.removeEventListener('mouseup', onUp)
+        handle.removeEventListener('pointermove', onMove)
+        handle.removeEventListener('pointerup', onUp)
+        handle.removeEventListener('pointercancel', onUp)
         setLive((cur) => {
           if (cur) onUpdate(cur)
           return null
         })
       }
 
-      window.addEventListener('mousemove', onMove)
-      window.addEventListener('mouseup', onUp)
+      handle.addEventListener('pointermove', onMove)
+      handle.addEventListener('pointerup', onUp)
+      handle.addEventListener('pointercancel', onUp)
     },
     [pin, onUpdate],
   )
@@ -144,8 +166,6 @@ function StickyNote({
     setDimmed(inside)
   }, [caret])
 
-  const scopeIsBook = pin.scope === 'book'
-
   return (
     <div
       ref={ref}
@@ -153,29 +173,30 @@ function StickyNote({
       style={{
         left: box.x,
         top: box.y,
-        width: box.w,
+        // 折起来时不占那么宽 —— 它这时候只是个名牌，
+        // 不该还霸着一张卡片的地方（贴五六张就把稿纸糊住了）
+        width: box.collapsed ? undefined : box.w,
         height: box.collapsed ? undefined : box.h,
       }}
     >
-      <div className="sticky-head" onMouseDown={(e) => startDrag(e, 'move')}>
+      <div className="sticky-head" onPointerDown={(e) => startDrag(e, 'move')}>
         <button
           className="sticky-title"
           onClick={() => onUpdate({ collapsed: !pin.collapsed })}
-          onMouseDown={(e) => e.stopPropagation()}
-          title={box.collapsed ? '展开' : '折叠'}
+          onPointerDown={(e) => e.stopPropagation()}
+          title={box.collapsed ? `展开「${card.title}」` : '折起来'}
         >
           {card.title}
         </button>
-        <div className="sticky-tools" onMouseDown={(e) => e.stopPropagation()}>
-          <button
-            className={scopeIsBook ? 'on' : ''}
-            title={scopeIsBook ? '全书都显示（点一下改为仅本章）' : '仅本章显示（点一下改为全书）'}
-            onClick={() =>
-              onUpdate({ scope: scopeIsBook ? `doc:${card.docId}` : 'book' })
-            }
-          >
-            {scopeIsBook ? '全书' : '本章'}
-          </button>
+        <div className="sticky-tools" onPointerDown={(e) => e.stopPropagation()}>
+          {/*
+            这儿原来有个「全书 / 本章」按钮，删了。
+            作者原话：「全文这个按钮意义不明，点击之后就会关掉标签页」——
+            它切的是这张卡在哪些文档里显示，而切成「本章」之后
+            换一篇文档它就消失了，看着就像自己被关掉了。
+            一个按钮如果多数时候的效果是「东西不见了」，那它就是个陷阱。
+            便利贴默认全书显示，够用。
+          */}
           <button title="打开完整设定" onClick={onOpen}>
             编辑
           </button>
@@ -200,7 +221,7 @@ function StickyNote({
           </div>
           <div
             className="sticky-resize"
-            onMouseDown={(e) => startDrag(e, 'resize')}
+            onPointerDown={(e) => startDrag(e, 'resize')}
             title="拖动调整大小"
           />
         </>

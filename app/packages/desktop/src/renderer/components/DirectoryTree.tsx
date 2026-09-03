@@ -11,6 +11,7 @@
 import { useState, type DragEvent } from 'react'
 import type { BookTree, ChapterNode, TextNode, VolumeNode } from '@bugu/core'
 import type { MenuItem } from './ContextMenu.js'
+import { startStickyDrag } from '../sticky-drag.js'
 
 export interface TreeActions {
   open(path: string): void
@@ -166,7 +167,6 @@ export function TextTree({
           + 卷
         </button>
       </div>
-      <div className="faint tree-tip">拖动可调整顺序 · 右键有更多操作</div>
     </>
   )
 }
@@ -255,11 +255,7 @@ export function SettingsTree({
               onContextMenu={(e) => onMenu(e, cardMenu(card.path, card.title))}
               // 拖到稿纸上就变成一张悬浮便利贴
               draggable
-              onDragStart={(e) => {
-                e.dataTransfer.effectAllowed = 'copy'
-                e.dataTransfer.setData('application/x-bugu-sticky', card.path)
-                e.dataTransfer.setData('text/plain', card.title)
-              }}
+              onDragStart={(e) => startStickyDrag(e, card.path)}
               title={`${card.title}（可以拖到稿纸上）`}
             >
               <span className="name">{card.title}</span>
@@ -275,11 +271,7 @@ export function SettingsTree({
           onClick={() => actions.open(card.path)}
           onContextMenu={(e) => onMenu(e, cardMenu(card.path, card.title))}
           draggable
-          onDragStart={(e) => {
-            e.dataTransfer.effectAllowed = 'copy'
-            e.dataTransfer.setData('application/x-bugu-sticky', card.path)
-            e.dataTransfer.setData('text/plain', card.title)
-          }}
+          onDragStart={(e) => startStickyDrag(e, card.path)}
           title={`${card.title}（可以拖到稿纸上）`}
         >
           <span className="name">{card.title}</span>
@@ -291,7 +283,6 @@ export function SettingsTree({
           + 分类
         </button>
       </div>
-      <div className="faint tree-tip">把便利贴拖到稿纸上，它就浮在那儿</div>
     </>
   )
 }
@@ -316,8 +307,6 @@ export function OutlineTree({
       <>
         <div className="empty-hint">
           还没有大纲。
-          <br />
-          大纲是独立文档，不是从正文自动生成的。
         </div>
         <div className="tree-actions">
           <button className="icon-btn" onClick={() => actions.newChapter(dir)}>

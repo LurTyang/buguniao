@@ -103,8 +103,6 @@ export function IdeaPanel({ bookPath, tree, onMergedInto, onOpen, refreshKey }: 
       ) : ideas.length === 0 ? (
         <div className="empty-hint">
           还没有灵感碎片。
-          <br />
-          手机端记下的东西会出现在这里。
         </div>
       ) : (
         <>

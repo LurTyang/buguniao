@@ -47,6 +47,7 @@ import type {
   BookKind,
   PublicStats,
   PublicProfile,
+  Award,
   SceneCast,
   EngineExport,
   ForeignPlan,
@@ -62,6 +63,8 @@ import type {
   StickyLayout,
   TrashEntry,
 } from '@bugu/core'
+import type { ThemeDraft } from './theme-draft.js'
+import type { ThemeSlot } from './theme-slots.js'
 
 /**
  * 「我在对外统计服务上是什么样」。**这里没有令牌** —— 令牌只在主进程里。
@@ -69,6 +72,20 @@ import type {
  * 三样东西齐了才会真有东西往外发：登录了、认领了短名、打开了自动上传。
  * 界面得把这三样分开说，不然作者搞不清「为什么别人读不到我」。
  */
+/** 一条标点替换规则 */
+export type SmartRule =
+  | { id: string; kind: 'plain'; from: string; to: string }
+  | { id: string; kind: 'pair'; from: string; open: string; close: string }
+
+/**
+ * 一个自选样式的槽位。
+ *
+ * 带名字和颜色 —— 有了名字它才跟「纸白」「护眼」平起平坐，
+ * 而不是一个躺在设置里的文件路径。
+ */
+// 栏位那套规矩（会长的一排、末尾永远留一个空位）在 theme-slots.ts
+export type { ThemeSlot } from './theme-slots.js'
+
 export interface StatsState {
   /** 登录了没有。没登录时下面几项都是空的，也不会去发请求 */
   signedIn: boolean
@@ -86,6 +103,43 @@ export interface StatsState {
   lastPushAt: string
   /** 上一次自动上传出的错。空 = 没出错。**只在页面上说一句，不弹窗** */
   autoError: string
+  /**
+   * 我拿到的奖状。**只读** —— 客户端不判定、不发、不改。
+   *
+   * 它只从 `/me` 来，公开接口里没有这个字段。
+   */
+  awards: Award[]
+}
+
+/** 读自选 CSS 的结果 */
+export interface ThemeCssResult {
+  /** CSS 正文。读不到就是空串 */
+  css: string
+  /** 配的是哪个文件。没配就是空串 */
+  path: string
+  /** 有什么不对劲。空 = 没问题。**这句话要显示给作者看** */
+  problem: string
+  /**
+   * 桥接翻译出来的排版规则条数。
+   *
+   * 0 通常不是坏事 —— 说明这份主题只调了颜色变量，那本来就能直接生效。
+   */
+  bridged: number
+  /**
+   * 这份主题定义的纸色。**空串 = 它压根没定义纸色**。
+   *
+   * 空串不是出错。有一整类 Typora 主题（phycat 那种）只给强调色和排版，
+   * 纸色用的是 Typora 自己的默认白 —— 装上之后纸自然还是白的。
+   * 这件事得说出来，不然作者只会看到「纸没变」，然后去找哪个文件漏了。
+   */
+  paper: string
+}
+
+/** 书架上那个位置要挂哪一张奖状 */
+export interface AwardChoice {
+  awards: Award[]
+  /** 挂哪一张（id）。空 = 挂最新的那张 */
+  pinned: string
 }
 
 export interface SearchHit {
@@ -94,7 +148,7 @@ export interface SearchHit {
   path: string
   type: DocType
   title: string
-  /** 带高亮标记的片段：命中处被  与  包住 */
+  /** 带高亮标记的片段：命中处被 U+0001 与 U+0002 包住 */
   snippet: string
   rank: number
 }
@@ -121,8 +175,23 @@ export interface UserSettings {
   countMode: 'withPunctuation' | 'withoutPunctuation'
   /** 主题 key。名单在 renderer/themes.ts —— 那儿是唯一一处定义 */
   theme: string
-  /** 自己挑的那份主题 CSS 的路径（Typora 主题可以直接选）。空 = 没挑 */
+  /** 自选样式的三个槽位 */
+  /**
+   * 自定义主题栏位。**长度是活的** —— 末尾永远留一个空位，直到满九个。
+   * 每一格要么是一份 CSS 文件，要么是一套自己调的。
+   */
+  themeCssSlots: ThemeSlot[]
+  /** 现在用第几个槽位。-1 = 用预设主题 */
+  themeCssActive: number
+  /** 0.4 之前的单个位置，只用于搬旧配置 */
   themeCss: string
+  /**
+   * 调色器手上那份**还在改的**草稿。null = 还没调过。
+   *
+   * 它不是「正在用的主题」—— 用的那套在栏位里。这一份只是让调色器
+   * 关掉再打开时能接着改，不至于每次都从预设重来。
+   */
+  themeDraft: ThemeDraft | null
   fontFamily: string
   fontSize: number
   lineHeight: number
@@ -154,6 +223,27 @@ export interface UserSettings {
   statsAutoPush: boolean
   /** 上次推成功是什么时候（本机时间，ISO）。空 = 一次都没推过 */
   statsLastPushAt: string
+  /** 每个主题各自的字号。换主题时自动换回那一档上次用的 */
+  fontSizeByTheme: Record<string, number>
+  /** 自己导进来的字体：字体名 → 文件名 */
+  customFonts: Record<string, string>
+  /** 打字机 · 竖向：当前行停在屏幕中部 */
+  typewriterV: boolean
+  /** 打字机 · 横向：当前列停在水平中央。**它会关掉自动折行** */
+  typewriterH: boolean
+  /** 专注模式：当前段落之外变淡 */
+  focusMode: boolean
+  /** 稿纸上下留白（像素） */
+  pagePadY: number
+  /** 首行缩进几个字。0 = 不缩进。是 CSS 缩进，文件里不存空格 */
+  paraIndent: number
+  /** 智能替换总开关 */
+  smartReplace: boolean
+  /**
+   * 标点替换的规则表。存在即生效，不存在即删除 —— 没有开关。
+   * `null` = 还没初始化过，界面会写入出厂那几条。
+   */
+  smartRules: SmartRule[] | null
   /** 两个侧边栏各自的宽度（像素）。按面板记，互换之后宽度跟着面板走 */
   dirBarWidth: number
   toolBarWidth: number
@@ -306,6 +396,8 @@ export interface TodayProgress {
   wordsToSignIn: number
   streak: number
   streakMakeups: number
+  /** 今天的签到线。**跟着作者设的每日底线走**，没设目标才用默认的 5000 */
+  signInWords: number
 }
 
 export interface ReorderOutcome {
@@ -347,9 +439,74 @@ export interface BuguApi {
    * 挑一份主题 CSS（Typora 的主题文件可以直接选），顺手存进设置。
    * 返回选中的路径；取消了返回 null。读不出来会抛错。
    */
-  pickThemeCss(): Promise<string | null>
+  /** 挑一份 CSS 放进某个槽位（不给就填第一个空位）。取消返回 null */
+  pickThemeCss(
+    slot?: number,
+  ): Promise<{ slot: number; slots: ThemeSlot[] } | null>
+  /** 换一个槽位。-1 = 不用自选样式 */
+  useThemeSlot(slot: number): Promise<number>
+  /** 清掉某个槽位。正在用它就顺带切回预设 */
+  clearThemeSlot(
+    slot: number,
+  ): Promise<{ slots: ThemeSlot[]; active: number }>
+  /** 给某个槽位改个名字 */
+  renameThemeSlot(
+    slot: number,
+    name: string,
+  ): Promise<ThemeSlot[]>
   /** 读出设置里那份主题 CSS 的内容。没配、或者文件没了都回空串 */
-  readThemeCss(): Promise<string>
+  /**
+   * 读那份自选 CSS。
+   *
+   * **读不到时要说清是哪一种读不到** —— 静默当没配的话，作者看到的是
+   * 「我明明选了主题，怎么一点变化没有」，而真实原因可能是文件被删了、
+   * 或者那份 CSS 里根本没有 `#write`。
+   */
+  /**
+   * 一次把选中的几部分导出去。
+   *
+   * 选了不止一部分就导成一个文件夹、每部分一个文件 ——
+   * 设定集拼在正文后面发给编辑是帮倒忙。
+   * 取消返回 null。
+   */
+  exportBundle(
+    bookPath: string,
+    opts: {
+      /** 导哪几部分 */
+      parts: { text: boolean; outline: boolean; settings: boolean }
+      /** md 保留语法，txt 不保留 */
+      format: 'txt' | 'md'
+      options: ExportOptions
+    },
+    title: string,
+  ): Promise<{ files: number; dir: string } | null>
+  readThemeCss(): Promise<ThemeCssResult>
+  /**
+   * 把自己调的那套导出成 .css。取消返回 null，成功返回文件路径。
+   *
+   * 导出的格式跟我们认得的一模一样 —— 这份文件用「自选样式」能再导回来。
+   */
+  exportThemeCss(draft: ThemeDraft): Promise<string | null>
+  /**
+   * 把自己调的那套存进自定义栏位。
+   *
+   * `slot` 给 -1 就是「加一份新的」（占用末尾那个空位）。
+   * 满九个了返回 null —— **不挤掉最老的那一份**，那是别人调了半天的配色。
+   */
+  saveThemeToSlot(
+    slot: number,
+    draft: ThemeDraft,
+  ): Promise<{ slot: number; slots: ThemeSlot[] } | null>
+  /**
+   * 导一个字体文件进来。**复制进 userData，不记原路径** ——
+   * 记路径的话他哪天清理下载文件夹，字体就没了。
+   * 取消选择返回 null。
+   */
+  pickFont(): Promise<{ family: string; fonts: Record<string, string> } | null>
+  /** 读某一款自选字体的字节（data URL）。只读在用的那一款 */
+  fontData(family: string): Promise<string>
+  /** 不要某一款了。文件也删掉；正在用它的话退回楷体 */
+  removeFont(family: string): Promise<Record<string, string>>
 
   // ── 菜单事件 ──
   /** 订阅主进程菜单事件，返回取消订阅的函数 */
@@ -589,6 +746,13 @@ export interface BuguApi {
   statsForget(): Promise<StatsState>
   /** 别人现在读到的是什么。走公开接口、不带令牌，跟别的网站同一条路 */
   statsPublic(handle: string): Promise<PublicProfile>
+  /**
+   * 我有哪些奖状、现在挂着哪一张。**读本机缓存，不发请求** ——
+   * 书架每次打开都要用它，不该每次都等一趟网络。
+   */
+  myAwards(): Promise<AwardChoice>
+  /** 换一张挂上。传空串 = 挂最新的那张 */
+  pinAward(id: string): Promise<AwardChoice>
   /**
    * 要推出去的是哪七个数 —— **本机算的，不发请求**。
    *

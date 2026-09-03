@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { FONTS, PUNCT_UNICODE_RANGE, fontKeyOf, resolveFontStack } from './fonts.js'
+import { FONTS, PUNCT_UNICODE_RANGE, fontKeyOf, resolveFontStack, customFamilyOf, customValueOf, customFontStack } from './fonts.js'
 
 describe('字体表本身', () => {
   it('一期就三款：楷体、宋体、黑体', () => {
@@ -83,5 +83,30 @@ describe('fontKeyOf · 下拉框该选中哪一项', () => {
 
   it('真·自定义返回 null', () => {
     expect(fontKeyOf("'我自己装的字体'")).toBeNull()
+  })
+})
+
+describe('自己导进来的字体', () => {
+  it('存的是 custom: 前缀，跟内置的 key 分得开', () => {
+    expect(customValueOf('霞鹜文楷')).toBe('custom:霞鹜文楷')
+    expect(customFamilyOf('custom:霞鹜文楷')).toBe('霞鹜文楷')
+    expect(customFamilyOf('kai')).toBe('')
+  })
+
+  it('【关键】一个叫 kai 的自选字体顶不掉内置楷体', () => {
+    expect(resolveFontStack('kai')).toBe(FONTS[0]!.stack)
+    expect(resolveFontStack('custom:kai')).toContain("'kai'")
+    expect(resolveFontStack('custom:kai')).not.toBe(FONTS[0]!.stack)
+  })
+
+  it('字体栈后面跟着兜底 —— 字体里没有的字不该显示成方框', () => {
+    const stack = customFontStack('霞鹜文楷')
+    expect(stack.startsWith("'霞鹜文楷'")).toBe(true)
+    expect(stack).toContain('楷体')
+    expect(stack.endsWith('serif')).toBe(true)
+  })
+
+  it('自选字体在下拉框里算「自定义」，不冒充内置的某一款', () => {
+    expect(fontKeyOf('custom:霞鹜文楷')).toBeNull()
   })
 })

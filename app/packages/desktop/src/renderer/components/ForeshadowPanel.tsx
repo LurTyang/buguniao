@@ -160,8 +160,6 @@ export function ForeshadowPanel({
           {tab === 'pending' ? (
             <>
               没有未回收的伏笔。
-              <br />
-              干净。
             </>
           ) : (
             '这里是空的。'

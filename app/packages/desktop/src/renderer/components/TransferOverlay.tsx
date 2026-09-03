@@ -271,9 +271,19 @@ function ExportPane({ bookPath, bookTitle }: { bookPath: string; bookTitle: stri
     stripForeshadow: true,
     stripWikiLinks: true,
     stripComments: true,
+    stripFloatMarks: true,
     indentFirstLine: true,
     includeChapterTitle: true,
   })
+  /** 导哪几部分。默认只导正文 —— 多数时候要的就是它 */
+  const [parts, setParts] = useState({ text: true, outline: false, settings: false })
+  /**
+   * 哪一档格式。
+   *
+   * **md 和 txt 的用途是反的**：md 是「原样搬走、换个编辑器接着写」，
+   * txt 是「排给人看」。所以切换格式时那几个开关也跟着换一套默认值。
+   */
+  const [format, setFormat] = useState<'txt' | 'md'>('txt')
   const [stat, setStat] = useState<{ chapterCount: number; chars: number; bytes: number } | null>(null)
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState<string | null>(null)
@@ -292,6 +302,21 @@ function ExportPane({ bookPath, bookTitle }: { bookPath: string; bookTitle: stri
     if (!chapters) return
     void api.exportPreview(chapters, opts).then(setStat).catch(() => {})
   }, [chapters, opts])
+
+  /** 一次把选中的几部分都导出去 */
+  const runBundle = async () => {
+    try {
+      setBusy(true)
+      setDone(null)
+      setError(null)
+      const r = await api.exportBundle(bookPath, { parts, format, options: opts }, bookTitle)
+      if (r) setDone(`导出了 ${r.files} 个文件：${r.dir}`)
+    } catch (e) {
+      setError(msg(e))
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const run = async (kind: 'txt' | 'docx' | 'perChapter') => {
     if (!chapters) return
@@ -334,6 +359,49 @@ function ExportPane({ bookPath, bookTitle }: { bookPath: string; bookTitle: stri
       </div>
 
       <div className="stats-title" style={{ marginTop: 16 }}>
+        导出哪几部分
+      </div>
+      <div className="exp-opts">
+        <Opt on={parts.text} onClick={() => setParts((p) => ({ ...p, text: !p.text }))} label="正文" />
+        <Opt
+          on={parts.outline}
+          onClick={() => setParts((p) => ({ ...p, outline: !p.outline }))}
+          label="大纲"
+        />
+        <Opt
+          on={parts.settings}
+          onClick={() => setParts((p) => ({ ...p, settings: !p.settings }))}
+          label="设定集"
+          hint="一个文件，分类当二级标题"
+        />
+      </div>
+
+      <div className="stats-title" style={{ marginTop: 16 }}>
+        格式
+      </div>
+      <div className="exp-opts">
+        <Opt
+          on={format === 'txt'}
+          onClick={() => {
+            setFormat('txt')
+            // 两档的用途是反的，默认值也该是反的。切过来就把 txt 那套摆上
+            setOpts((o) => ({ ...o, indentFirstLine: true }))
+          }}
+          label="txt · 排给人看"
+          hint="Markdown 语法全部转成纯文字，首行缩进两格"
+        />
+        <Opt
+          on={format === 'md'}
+          onClick={() => {
+            setFormat('md')
+            setOpts((o) => ({ ...o, indentFirstLine: false }))
+          }}
+          label="md · 原样搬走"
+          hint="保留标题、粗体、引用这些语法，换个编辑器能接着写。不加首行缩进（源文件不该有）"
+        />
+      </div>
+
+      <div className="stats-title" style={{ marginTop: 16 }}>
         导出选项
       </div>
       <div className="exp-opts">
@@ -348,14 +416,43 @@ function ExportPane({ bookPath, bookTitle }: { bookPath: string; bookTitle: stri
         <Opt on={!!opts.stripForeshadow} onClick={() => toggle('stripForeshadow')} label="移除伏笔标记" hint="发给编辑时该去掉" />
         <Opt on={!!opts.stripWikiLinks} onClick={() => toggle('stripWikiLinks')} label="双链转纯文本" hint="[[李四]] → 李四" />
         <Opt on={!!opts.stripComments} onClick={() => toggle('stripComments')} label="移除注释" hint="你写给自己的备注" />
+        {/*
+          0.4 补的：`@` 从前根本没被处理，导给编辑的 txt 里行首那个 @
+          是原样带出去的。那不是「还没做的功能」，是已有功能漏了一种标记
+        */}
+        <Opt
+          on={!!opts.stripFloatMarks}
+          onClick={() => toggle('stripFloatMarks')}
+          label="移除便利贴标记"
+          hint="去掉那个 @，那句话留着"
+        />
+        <Opt
+          on={!!opts.spaceBetweenCjkAndLatin}
+          onClick={() => toggle('spaceBetweenCjkAndLatin')}
+          label="中英之间加空格"
+          hint="写了3000字 → 写了 3000 字"
+        />
+        <Opt
+          on={!!opts.tidySpaces}
+          onClick={() => toggle('tidySpaces')}
+          label="收拾多余空格"
+          hint="连着的空格压成一个、标点前不留空格。行首缩进不动"
+        />
       </div>
 
       {error && <div className="banner danger" style={{ borderRadius: 6, marginTop: 12 }}>{error}</div>}
       {done && <div className="banner" style={{ borderRadius: 6, marginTop: 12 }}>{done}</div>}
 
       <div className="exp-actions">
-        <button className="btn btn-primary" disabled={busy} onClick={() => void run('txt')}>
-          导出完整 txt
+        <button
+          className="btn btn-primary"
+          disabled={busy || (!parts.text && !parts.outline && !parts.settings)}
+          onClick={() => void runBundle()}
+        >
+          {busy ? '导出中……' : `一键导出 ${format}`}
+        </button>
+        <button className="btn" disabled={busy} onClick={() => void run('txt')}>
+          只导正文 txt
         </button>
         <button className="btn" disabled={busy} onClick={() => void run('docx')}>
           导出 Word

@@ -29,6 +29,10 @@ Environment=BUGU_DB=/var/lib/bugu-stats/stats.db
 Environment=BUGU_ISSUER=https://auth.ferret.icu/oidc
 # 建了 API 资源之后再填。空着就走 userinfo 认令牌，一样能用
 Environment=BUGU_AUDIENCE=
+# 谁能发奖状：已有账号的 Logto sub，逗号或空白分隔。
+# 这不是一种账号，是一张名单 —— 留空 = 谁都不能发（默认就该是这样）。
+# 改完记得 systemctl daemon-reload && systemctl restart bugu-stats
+Environment=BUGU_ADMIN_SUBS=
 
 # ── 收紧权限：这服务只需要读自己的代码、写一个数据库文件 ──
 NoNewPrivileges=true

@@ -19,11 +19,19 @@ import { Auth, bearerOf } from './auth.js'
 import { checkHandle } from './handle.js'
 import type { Store } from './db.js'
 import { parsePublicStats, toPublicJson } from './stats.js'
+import { checkAward } from './awards.js'
 
 export interface ServerDeps {
   store: Store
   auth: Auth
   now?: () => string
+  /**
+   * 谁能发奖状（Logto sub 的名单）。
+   *
+   * **默认空集 = 谁都不能发。** 这一条要默认关着：
+   * 忘了配的后果应该是「发不出去」，不该是「谁都能发」。
+   */
+  admins?: ReadonlySet<string>
 }
 
 /** 请求体最大多少。七个数撑死几百字节，给 16KB 已经很宽松 */
@@ -65,6 +73,7 @@ async function readBody(req: http.IncomingMessage): Promise<{ ok: true; value: u
 
 export function createServer(deps: ServerDeps): http.Server {
   const now = deps.now ?? (() => new Date().toISOString())
+  const admins = deps.admins ?? new Set<string>()
 
   const requireUser = async (
     req: http.IncomingMessage,
@@ -135,6 +144,9 @@ export function createServer(deps: ServerDeps): http.Server {
             handle: row?.handle ?? '',
             updatedAt: row?.updatedAt ?? '',
             stats: row ? toPublicJson(row) : null,
+            // 奖状只在这儿吐。公开接口一个字段都不加 ——
+            // 「对外统计只发七个整数」那句话要继续成立
+            awards: deps.store.awardsOf(sub),
           })
           return
         }
@@ -185,6 +197,79 @@ export function createServer(deps: ServerDeps): http.Server {
           deps.store.putStats(sub, parsed.stats, now())
           const row = deps.store.bySub(sub)
           send(res, 200, { ok: true, handle: row?.handle ?? '' })
+          return
+        }
+
+        // ── 发奖状 ──
+        //
+        // 只有名单上的 sub 能用。**名单空着时谁都不能发** ——
+        // 忘了配的后果应该是「发不出去」，不该是「谁都能发」。
+        if (
+          p === '/api/v1/admin/awards' &&
+          (method === 'PUT' || method === 'DELETE' || method === 'GET')
+        ) {
+          const sub = await requireUser(req, res)
+          if (sub === null) return
+          if (!admins.has(sub)) {
+            // 说「没有这个接口」而不是「你不是管理员」——
+            // 后者等于告诉陌生人「这儿有个管理接口，再找找入口」
+            fail(res, 404, '没有这个接口')
+            return
+          }
+          // GET 从查询串取短名，PUT/DELETE 从请求体取
+          let o: Record<string, unknown>
+          if (method === 'GET') {
+            o = { handle: url.searchParams.get('handle') ?? '' }
+          } else {
+            const body = await readBody(req)
+            if (!body.ok) {
+              fail(res, 400, body.why)
+              return
+            }
+            o = body.value as Record<string, unknown>
+          }
+
+          // 发给谁：按短名找。**发错人比发不出去麻烦**，所以找不到就明说
+          const h = checkHandle(o['handle'])
+          if (!h.ok) {
+            fail(res, 400, h.why)
+            return
+          }
+          const target = deps.store.byHandle(h.handle)
+          if (!target) {
+            fail(res, 404, `没有「${h.handle}」这个人`)
+            return
+          }
+          const targetSub = deps.store.subOfHandle(h.handle)
+          if (!targetSub) {
+            fail(res, 404, `没有「${h.handle}」这个人`)
+            return
+          }
+
+          // 看看他现在有哪些。**发之前先看一眼**，免得重复发或者撤错
+          if (method === 'GET') {
+            send(res, 200, { handle: h.handle, awards: deps.store.awardsOf(targetSub) })
+            return
+          }
+
+          if (method === 'DELETE') {
+            const id = typeof o['id'] === 'string' ? o['id'].trim().toLowerCase() : ''
+            if (!id) {
+              fail(res, 400, '要说撤哪一张（id）')
+              return
+            }
+            const gone = deps.store.revoke(targetSub, id)
+            send(res, 200, { ok: true, removed: gone, awards: deps.store.awardsOf(targetSub) })
+            return
+          }
+
+          const a = checkAward(o)
+          if (!a.ok) {
+            fail(res, 400, a.why)
+            return
+          }
+          deps.store.grant(targetSub, a.value, now())
+          send(res, 200, { ok: true, awards: deps.store.awardsOf(targetSub) })
           return
         }
 

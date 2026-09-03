@@ -73,7 +73,13 @@ const E2E_SCRIPT = `(async () => {
     const today = await api.todayProgress(book.rootPath)
     check('今日字数统计到了', today.words === 34, '实得 ' + today.words)
     check('未达签到线', today.signedIn === false)
-    check('差额正确', today.wordsToSignIn === 5000 - 34, '实得 ' + today.wordsToSignIn)
+    // 0.4 起签到线**跟着作者设的每日底线走**，不再是写死的 5000。
+    // 所以这儿不能再拿常量比，要拿这一趟返回的那条线比
+    check('签到线跟着每日底线走，不是写死的 5000',
+      today.signInWords > 0 && today.signInWords !== 5000,
+      '实得签到线 ' + today.signInWords)
+    check('差额正确', today.wordsToSignIn === today.signInWords - 34,
+      '实得 ' + today.wordsToSignIn + '，签到线 ' + today.signInWords)
 
     // ── 卷与章节 ──
     const vol = await api.createVolume(book.rootPath, '第一卷 少年游')
@@ -1064,6 +1070,10 @@ export function runSmoke(win: BrowserWindow, tempRoot: string): void {
       electron: process.versions['electron'],
       chrome: process.versions['chrome'],
       node: process.versions['node'],
+      // 配置文件到底写在哪儿。查「改了设置怎么没生效」时第一个要看的就是它 ——
+      // 开发跑和打包跑的 userData 不是同一个目录，很容易对着错的那份文件调
+      userData: app.getPath('userData'),
+      packaged: app.isPackaged,
     }
 
     const report: SmokeReport = {
@@ -1149,12 +1159,104 @@ export function runSmoke(win: BrowserWindow, tempRoot: string): void {
             // 要人去输密码。所以协议那一半交给 core/oidc 的单元测试
             // （44 条，URL 参数、state/nonce 校验、令牌解析都钉死了），
             // 这里只验主进程 ↔ 渲染进程这一段接没接对。
+            // 告诉脚本这次是不是干净配置 —— 有些断言只在干净配置下成立
+            await win.webContents.executeJavaScript(
+              `window.__buguSmokeUserData = ${process.env['BUGU_SMOKE_USERDATA'] ? 'true' : 'false'}`,
+            )
             const r3 = (await win.webContents.executeJavaScript(LOGIN_SCRIPT)) as {
               steps: SmokeReport['steps']
               threw: string | null
             }
             steps.push(...r3.steps)
             if (r3.threw) problems.push(`登录流程抛异常: ${r3.threw}`)
+
+            /*
+             * ── 真的点进一本书 ──
+             *
+             * 上面那些全走 IPC，界面一直停在书架上 —— 所以「点开一本书
+             * 是一片纯白」这种事，冒烟 277 步全绿也照样发现不了。
+             * 作者就是这么撞上的。
+             *
+             * 这一步点一下书架上的第一本，等 React 渲染完，
+             * 然后看稿纸那棵树到底有没有东西。渲染时抛异常的话
+             * React 会把整棵树卸掉 —— 那正是「一片纯白」的样子。
+             */
+            // 上面那些书是走 IPC 建的，书架那份 React 状态并不知道 ——
+            // 重载一次让它重新读一遍，才点得到
+            /*
+             * 【专注模式】开书之前先把稿子摆成中文小说的样子：
+             * **三行连着写，中间不空行**。
+             *
+             * 这一步是为了钉死那个错过两次的 bug —— 按「空行分块」算段落时，
+             * 这三行会被当成同一段，于是一行都不淡，看起来跟没开专注模式一样。
+             */
+            // ⚠️ 下面这段是**发到页面里去执行的 JS 源码**，写在 TS 模板字符串里。
+            //    里头字符串的换行必须写成两个反斜杠 —— 写一个的话 TS 先把它
+            //    变成真换行，发过去的 JS 字符串当场断掉（SyntaxError）。
+            const SETUP_FOCUS = `(async () => {
+              try {
+                const bs = await window.bugu.listBooks()
+                const b = bs[0]
+                if (!b) return 'no-book'
+                const t = await window.bugu.loadTree(b.rootPath || b.path)
+                const ch = (t.text || [])[0]
+                if (!ch) return 'no-chapter'
+                await window.bugu.saveDoc(ch.path, '第一行连着写。\\n第二行也连着写。\\n第三行还是连着写。\\n')
+                await window.bugu.updateSettings({ focusMode: true })
+                return 'ok'
+              } catch (e) { return 'err: ' + String((e && e.message) || e) }
+            })()`
+            const setup = (await win.webContents.executeJavaScript(SETUP_FOCUS)) as string
+            if (setup !== 'ok') problems.push(`摆专注模式的稿子失败: ${setup}`)
+
+            win.webContents.reload()
+            await new Promise<void>((r) => {
+              win.webContents.once('did-finish-load', () => setTimeout(r, 1200))
+            })
+            const opened = (await win.webContents.executeJavaScript(OPEN_BOOK_SCRIPT)) as {
+              ok: boolean
+              detail: string
+              classed: number
+              bridgeHit: boolean
+              focusBits: string
+            }
+            steps.push({ name: '【关键】点开一本书之后稿纸不是白的', ok: opened.ok, detail: opened.detail })
+            /*
+             * 行别类是 0.4 主题方案的地基：主题写的 `#write .cm-h1`、
+             * 以及从 Typora 主题翻过来的那 60 多条规则，全靠这些类才有
+             * 地方落脚。单元测试只能验「这一行该是什么」，
+             * **贴没贴到真的 DOM 上只有这儿验得了**。
+             */
+            steps.push({
+              name: '稿纸的行贴上了行别类（主题靠它们落脚）',
+              ok: opened.classed > 0,
+              detail: `${opened.classed} 行带类`,
+            })
+            steps.push({
+              name: '【关键】翻译出来的 `#write .cm-p` 在真 DOM 上命中',
+              ok: opened.bridgeHit,
+              detail: opened.bridgeHit ? '算出来的颜色对上了' : '注进去了但没生效 —— 稿纸的结构变了？',
+            })
+            /*
+             * 三行连着写、光标在第二行，期望 dim,lit,dim。
+             *
+             * 之所以要在真界面上验：这一条的两次错都出在「段」的定义上，
+             * 而定义错了照样有灰有黑 —— 单元测试钉的是规则，
+             * 这一步钉的是「规则真的接到屏幕上了」。
+             */
+            /*
+             * 光标在第二行，所以**只有第二行亮**，别的全淡 ——
+             * 不管有几行、末尾那个空行算不算。
+             * 断言写成「亮着的正好是第 2 行」而不是硬编码一个串，
+             * 免得以后章节多一行就红。
+             */
+            const bits = opened.focusBits.split(',')
+            const litAt = bits.map((b, i) => (b === 'lit' ? i : -1)).filter((i) => i >= 0)
+            steps.push({
+              name: '【关键】专注模式：不空行分段时，上下两行也会淡下去',
+              ok: bits.length >= 3 && litAt.length === 1 && litAt[0] === 1,
+              detail: opened.focusBits,
+            })
 
             for (const s of steps) {
               if (!s.ok) problems.push(`步骤失败「${s.name}」${s.detail ? ' —— ' + s.detail : ''}`)
@@ -1169,6 +1271,137 @@ export function runSmoke(win: BrowserWindow, tempRoot: string): void {
     }, 900)
   })
 }
+
+/**
+ * 点开一本书，看稿纸有没有真的渲染出来。
+ *
+ * **这一步补的是一个真实的洞**：0.4 做到一半时，Work 那棵树渲染时抛了异常，
+ * 界面一片纯白 —— 而冒烟全绿，因为它从头到尾没点进过任何一本书。
+ *
+ * 判据故意定得很笨：**稿纸区域里有没有东西**。
+ * 精确断言「显示了哪几个字」会跟着界面改来改去，而「白屏」这件事
+ * 只需要一个笨判据就能钉死。
+ */
+const OPEN_BOOK_SCRIPT = `(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+  const has = (sel) => !!document.querySelector(sel)
+  try {
+    // 启动问候挡在前面时先点掉它
+    var greet = document.querySelector('.greet .btn-primary')
+    if (greet) { greet.click(); await sleep(300) }
+
+    const cards = Array.from(document.querySelectorAll('.book-card'))
+      .filter(function (el) { return el.className.indexOf('idea-card') < 0 })
+    if (cards.length === 0) return { ok: false, classed: 0, bridgeHit: false, focusBits: '', detail: '书架上一本书都没有，点不进去' }
+
+    cards[0].click()
+    for (var i = 0; i < 40; i++) {
+      await sleep(100)
+      if (has('.work')) break
+    }
+    await sleep(500)
+
+    if (!has('.work')) return { ok: false, classed: 0, bridgeHit: false, focusBits: '', detail: '点了之后没有 .work' }
+
+    // 目录树里点开第一篇 —— 进书之后默认可能没打开任何文档
+    var docs = Array.from(document.querySelectorAll('.tree-chapter, .tree-item'))
+    if (docs.length > 0) { docs[0].click(); await sleep(700) }
+
+    // 稿纸这条链上谁在画不透明背景 —— Typora 主题靠 #write 及其
+    // ::before 上色，链上任何一层不透明都会把它盖掉
+    var chain = ['.work', '.paper', '#write', '.cm-editor', '.cm-scroller', '.cm-content']
+    var paints = chain.map(function (sel) {
+      var n = document.querySelector(sel)
+      if (!n) return sel + '=无'
+      var bg = getComputedStyle(n).backgroundColor
+      return sel + '=' + bg
+    }).join(' | ')
+
+    var bits = {
+      paints: paints,
+      work: has('.work'),
+      paper: has('.paper'),
+      editor: has('.cm-editor'),
+      content: has('.cm-content'),
+      lines: document.querySelectorAll('.cm-line').length,
+      tree: document.querySelectorAll('.tree-item').length,
+      // 行别类有没有真的贴上去。主题全靠它们才有地方落脚，
+      // 而这件事只有在真渲染出来的稿纸上才验得了
+      classed: document.querySelectorAll(
+        '.cm-p,.cm-h1,.cm-h2,.cm-h3,.cm-h4,.cm-h5,.cm-h6,.cm-quote,.cm-li,.cm-ol,.cm-code,.cm-hr,.cm-table'
+      ).length,
+    }
+    var cm = document.querySelector('.cm-content')
+    var cmText = cm ? (cm.innerText || '').replace(/\s+/g, '') : ''
+
+    if (!bits.editor) {
+      return { ok: false, classed: 0, bridgeHit: false, focusBits: '', detail: '稿纸里没有编辑器：' + JSON.stringify(bits) }
+    }
+    if (cmText.length === 0) {
+      return { ok: false, classed: 0, bridgeHit: false, focusBits: '', detail: '编辑器在但一个字都没有：' + JSON.stringify(bits) }
+    }
+    /*
+     * 实地验一次「翻译出来的选择器到底命不命中」。
+     *
+     * ⚠️ 这段注释在模板字符串里面，**不许出现反引号** —— 它会当场把
+     *    模板闭掉，而报错指向的行跟真正的原因看着毫无关系。踩过两次。
+     *
+     * 单元测试只能证明我们把「#write p」翻成了「#write .cm-p」。
+     * 但那串字符在**真 DOM** 上管不管用，是另一回事 ——
+     * 中间隔着 .cm-editor / .cm-scroller / .cm-content 三层，
+     * 任何一层的结构变了，翻译就整个白做，而且悄无声息。
+     *
+     * 所以照着翻译出来的形状注一条进去，回头量一下算出来的颜色。
+     */
+    /*
+     * 【专注模式】三行连着写，光标点在第二行 —— 该淡的是第一、第三行。
+     *
+     * 这一条是作者报了两次的东西，而它两次都「看起来在工作」：
+     * 屏幕上确实有灰有黑，只是分界线划错了地方。
+     * 所以要**数**：亮着的必须正好是光标那一行。
+     */
+    var focusBits = 'no-lines'
+    var lines = Array.prototype.slice.call(document.querySelectorAll('.cm-line'))
+    if (lines.length >= 3) {
+      /*
+       * ⚠️ 不能用「lines[1].click()」。
+       *
+       * 「HTMLElement.click()」只派发一个 click 事件，**不会移动焦点** ——
+       * 而「焦点不在稿纸上就一个字都不淡」正是这个功能自己的规矩。
+       * 于是脚本量到的是「全亮」，看着像功能坏了，其实是没点进去。
+       * 真人用鼠标点没这问题，所以这个坑只在自动化里踩得到。
+       */
+      var cmc = document.querySelector('.cm-content')
+      if (cmc) cmc.focus()
+      var rng = document.createRange()
+      rng.setStart(lines[1].firstChild || lines[1], 0)
+      rng.collapse(true)
+      var wsel = window.getSelection()
+      wsel.removeAllRanges()
+      wsel.addRange(rng)
+      await sleep(400)
+      var dim = lines.map(function (el) { return el.className.indexOf('cm-dimmed') > -1 })
+      focusBits = dim.map(function (d) { return d ? 'dim' : 'lit' }).join(',')
+    }
+
+    var probe = document.createElement('style')
+    probe.textContent = '#write .cm-p{color:rgb(1,2,3) !important}'
+    document.head.appendChild(probe)
+    var target = document.querySelector('#write .cm-p')
+    var hit = !!target && getComputedStyle(target).color === 'rgb(1, 2, 3)'
+    probe.remove()
+
+    return {
+      ok: true,
+      bridgeHit: hit,
+      focusBits: focusBits,
+      classed: bits.classed,
+      detail: '正文 ' + cmText.length + ' 个字，' + JSON.stringify(bits),
+    }
+  } catch (e) {
+    return { ok: false, classed: 0, bridgeHit: false, focusBits: '', detail: '点开时抛了：' + String((e && e.message) || e) }
+  }
+})()`
 
 /**
  * 登录那一段。
@@ -1235,7 +1468,172 @@ const LOGIN_SCRIPT = `(async () => {
     const themed = await api.updateSettings({ theme: 'night' })
     check('主题换得动', themed.theme === 'night', themed.theme)
     await api.updateSettings({ theme: 'light' })
-    check('没配自选样式时读出来是空串', (await api.readThemeCss()) === '')
+    // ── 0.4 新加的那几样，冒烟只验「IPC 通没通、默认值对不对」 ──
+    check('【关键】打字机、专注模式默认都关着',
+      cfg.typewriterV === false && cfg.typewriterH === false && cfg.focusMode === false,
+      [cfg.typewriterV, cfg.typewriterH, cfg.focusMode].join('/'))
+    // smartRules 是 null 表示「还没初始化过」，界面会写入出厂那几条。
+    // ⚠️ 别写成 Object.keys(cfg.smartRules) —— null 会当场抛
+    /*
+     * ⚠️ 下面这两条只在**干净配置**下成立。
+     *
+     * 冒烟平时跑在一个临时 userData 里，所以是干净的；但拿
+     * BUGU_SMOKE_USERDATA 指过去验「老配置迁移」时就不是了 ——
+     * 那时候规则表和自选样式本来就该有东西。
+     * 断言要说清自己的前提，否则换个场景跑就是一片假红。
+     */
+    var fresh = !window.__buguSmokeUserData
+    check('智能替换默认开着', cfg.smartReplace === true, String(cfg.smartReplace))
+    if (fresh) {
+      check('干净配置下规则表还没初始化',
+        cfg.smartRules === null, JSON.stringify(cfg.smartRules))
+    } else {
+      check('老配置迁移之后规则表是数组，不是那个会让界面白屏的开关对象',
+        Array.isArray(cfg.smartRules) || cfg.smartRules === null,
+        JSON.stringify(cfg.smartRules))
+    }
+    check('首行缩进是 CSS 的事，默认缩两格', cfg.paraIndent === 2, String(cfg.paraIndent))
+    check('还没导过字体', Object.keys(cfg.customFonts).length === 0)
+
+    /*
+     * ── 调色器 ──
+     *
+     * 验的是**存进去的草稿真能变成生效的 CSS**这一整条链：
+     * 写配置 → 主进程按草稿出片 → readThemeCss 把它当成当前样式给回来。
+     *
+     * 这条链一断的表现是「调了半天，重启就没了」——
+     * 而那种坏法只有真存一次、真读一次才试得出来。
+     */
+    if (fresh) {
+      check('干净配置下还没调过主题', cfg.themeDraft === null, JSON.stringify(cfg.themeDraft))
+      // 默认就一个空位，它同时是「加一份主题」那个按钮
+      check('默认只有一个空栏位',
+        cfg.themeCssSlots.length === 1 && !cfg.themeCssSlots[0].path && !cfg.themeCssSlots[0].draft,
+        JSON.stringify(cfg.themeCssSlots))
+    }
+    var beforeDraft = await api.readThemeCss()
+    var slotsWas = (await api.getSettings()).themeCssSlots.length
+    var made = { name: '冒烟配色', font: "'楷体', serif", vars: { '--bg-color': '#123456', '--ok': '#0f0' } }
+    var saved = await api.saveThemeToSlot(-1, made)
+    check('自己调的那套能存进栏位', !!saved && saved.slot >= 0, JSON.stringify(saved && saved.slot))
+    /*
+     * 【无限扩展】这一条是这次改动的核心：
+     * 占掉一个空位之后，末尾必须**又长一个**空位出来 ——
+     * 否则第二套自制主题就没地方放，而作者只会发现「加不了了」。
+     */
+    check('【关键】占掉空位之后末尾又长一个，所以能一直加下去',
+      !!saved && saved.slots.length === slotsWas + 1 &&
+      !saved.slots[saved.slots.length - 1].path && !saved.slots[saved.slots.length - 1].draft,
+      saved ? saved.slots.length + ' 格' : '')
+    var drafted = await api.readThemeCss()
+    check('【关键】自己调的那套能变成 CSS 发回来',
+      drafted.css.indexOf('Theme Name: 冒烟配色') >= 0 && drafted.css.indexOf('--bg-color: #123456') >= 0,
+      drafted.css.slice(0, 80))
+    check('调色器出的片不报错、也不需要翻译',
+      drafted.problem === '' && drafted.bridged === 0, drafted.problem)
+    check('纸色直接就是 --bg-color，不用去猜', drafted.paper === '#123456', drafted.paper)
+    check('字体跟着走 —— 别人导入这份主题，稿纸的字也变',
+      drafted.css.indexOf('--font-body') >= 0 && drafted.css.indexOf('font-family: var(--font-body)') >= 0)
+
+    // 再存一套：两套自制主题要能同时留着，这正是这次要解决的事
+    var saved2 = await api.saveThemeToSlot(-1, { name: '冒烟配色二号', font: '', vars: { '--bg-color': '#654321' } })
+    check('两套自制主题能同时留着',
+      !!saved2 && saved2.slot !== (saved && saved.slot) &&
+      saved2.slots.filter(function (x) { return !!x.draft }).length === 2,
+      saved2 ? JSON.stringify(saved2.slots.map(function (x) { return x.name })) : '')
+    // 切回第一套，说明「存好几套、点一下就换」真的成立
+    await api.useThemeSlot(saved.slot)
+    check('切回第一套拿到的是第一套的 CSS',
+      (await api.readThemeCss()).css.indexOf('Theme Name: 冒烟配色 ') >= 0 ||
+      (await api.readThemeCss()).css.indexOf('#123456') >= 0)
+
+    // 删掉两格，回到原样；删的是整格，不是留个洞
+    var del2 = await api.clearThemeSlot(saved2.slot)
+    var del1 = await api.clearThemeSlot(saved.slot)
+    check('删掉之后栏位数回到原样', del1.slots.length === slotsWas,
+      del1.slots.length + ' / ' + del2.slots.length)
+    check('删掉正在用的那格之后回预设', del1.active === -1, String(del1.active))
+    var after = await api.readThemeCss()
+    check('关掉之后回到原来那一份', after.css === beforeDraft.css,
+      after.css.slice(0, 40))
+
+    var awards = await api.myAwards()
+    check('没登录时一张奖状都没有', awards.awards.length === 0 && awards.pinned === '',
+      JSON.stringify(awards))
+
+    // 导出：一部分都不选时要明确报错，而不是悄悄导出一个空文件。
+    //
+    // ⚠️ 这一条最早写成了 book.meta.path —— 而这段脚本里根本没有 book，
+    // 于是它抛的是 ReferenceError，测试**因为错误的原因通过了**。
+    // 假通过比不测更坏：它会让人以为这条路已经验过了。
+    // 所以现在先真的拿一本书，并且断言报错里说的是「没选」这件事。
+    var booksNow = await api.listBooks()
+    var bundleWhy = ''
+    if (booksNow.length === 0) {
+      bundleWhy = '（书架是空的，这一条跳过）'
+      check('一部分都没选时导出会被挡下来', true, bundleWhy)
+    } else {
+      try {
+        await api.exportBundle(
+          booksNow[0].rootPath,
+          { parts: { text: false, outline: false, settings: false }, format: 'txt', options: {} },
+          '冒烟测试',
+        )
+      } catch (e) {
+        bundleWhy = String((e && e.message) || e)
+      }
+      check('【关键】一部分都没选时导出会被挡下来，不产出空文件',
+        bundleWhy.indexOf('没选') > -1, bundleWhy || '（居然没报错）')
+    }
+
+    /*
+     * ── 三段样式的先后顺序 ──
+     *
+     * styles.css（兜底）→ 预设主题的变量 → 自选样式。
+     * 三段都是 :root、同权重，**谁在后面谁生效**。
+     *
+     * 这一条钉的是一个真出过的 bug：applyTheme 用 appendChild，
+     * 而 appendChild 对已在文档里的元素是「移到末尾」—— 于是改一下字号，
+     * 预设那段就跳到自选样式后面，把主题盖了回去。
+     * 表现是「选了自选样式但没变」，而重启之后又好了。
+     */
+    var vars = document.getElementById('bugu-theme-vars')
+    check('预设主题的变量写成了一段 style，不是行内样式',
+      !!vars && document.documentElement.style.getPropertyValue('--bg-color') === '',
+      vars ? '找到了' : '没找到 bugu-theme-vars')
+    // ⚠️ 用 html 而不是 :root —— :root 是伪类、权重更高，
+    // 用它的话自选主题里的 :root{} 就压不过来（作者报过三次「只有滚动条变了」）
+    check('【关键】预设主题用的是 html 选择器，好让自选主题的 :root 压过来',
+      !!vars && (vars.textContent || '').indexOf('html{') === 0,
+      (vars && (vars.textContent || '').slice(0, 24)) || '')
+
+    if (vars) {
+      var kids = Array.prototype.slice.call(document.head.children)
+      var iVars = kids.indexOf(vars)
+      var sheets = kids.filter(function (n) {
+        return n.tagName === 'STYLE' || n.tagName === 'LINK'
+      })
+      var iApp = -1
+      for (var k = 0; k < kids.length; k++) {
+        var n = kids[k]
+        var isApp = (n.tagName === 'LINK' && (n.getAttribute('href') || '').indexOf('.css') > -1) ||
+          (n.tagName === 'STYLE' && n.id === '' && (n.textContent || '').indexOf('--page-width') > -1)
+        if (isApp) iApp = k
+      }
+      check('【关键】预设主题排在 styles.css 之后 —— 排前面会被兜底那份盖掉',
+        iApp < 0 || iVars > iApp, 'styles.css 在 ' + iApp + '，主题变量在 ' + iVars)
+      check('head 里样式表数量正常', sheets.length >= 2, String(sheets.length))
+    }
+
+    var themeCss = await api.readThemeCss()
+    if (fresh) {
+      check('没配自选样式时读出来是空的，并且不报问题',
+        themeCss.css === '' && themeCss.path === '' && themeCss.problem === '',
+        JSON.stringify(themeCss).slice(0, 120))
+    } else {
+      check('老配置里那份自选样式被搬进了槽位，还能读出来',
+        typeof themeCss.css === 'string', JSON.stringify(themeCss.path))
+    }
 
     check('设置里有「上次在哪儿」', 'lastPlace' in cfg, JSON.stringify(cfg.lastPlace))
     const placed = await api.updateSettings({
