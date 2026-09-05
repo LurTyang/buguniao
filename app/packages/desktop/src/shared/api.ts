@@ -246,6 +246,8 @@ export interface UserSettings {
   splitRight: RightSide | null
   /** 左边占的比例，0.2–0.8。见 renderer/split.ts */
   splitRatio: number
+  /** 随手粘在右边那一段字。存配置不存文件 —— 它是临时参考 */
+  splitScratch: string
   /** 稿纸上下留白（像素） */
   pagePadY: number
   /** 首行缩进几个字。0 = 不缩进。是 CSS 缩进，文件里不存空格 */
@@ -494,6 +496,13 @@ export interface BuguApi {
     title: string,
   ): Promise<{ files: number; dir: string } | null>
   readThemeCss(): Promise<ThemeCssResult>
+  /**
+   * 读一个**书外**的文本文件，摆到双屏右边当参考。
+   *
+   * 只读不写：这是别人的文件，不咕鸟不该碰它。
+   * 太大、不像文本的都会被挡下来并说清楚为什么。
+   */
+  readAnyText(path: string): Promise<{ text: string; name: string }>
   /**
    * 把自己调的那套导出成 .css。取消返回 null，成功返回文件路径。
    *

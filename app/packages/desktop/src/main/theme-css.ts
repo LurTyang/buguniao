@@ -338,6 +338,47 @@ function endsOnPseudo(sel: string): boolean {
   return /::?(?:before|after|first-line|first-letter|marker|placeholder|selection)/i.test(sel)
 }
 
+/**
+ * 稿纸容器在我们这边的类名。
+ *
+ * ─────────────────────────────────────────────────────────────
+ * 【为什么不能只靠 `#write`】
+ *
+ * Typora 主题全都把正文规则写在 `#write` 底下，所以稿纸得顶着这个 id。
+ * 但双屏之后页面上有**两块稿纸** —— 两块都叫 `write` 的话 HTML 就不合法了，
+ * 而且 `querySelector('#write')` 只会拿到第一块。
+ *
+ * 实测过：id 重复时 CSS 照样两块都命中（选择器是按属性匹配的），
+ * 所以现在**并没有坏**。但那是在靠一个不合法的写法工作，
+ * 而且任何一处 JS 去 `#write` 找稿纸都会悄悄只找到左边那块。
+ *
+ * 所以：`id="write"` 只留给主稿纸（左边），两块都带上这个类，
+ * 再把主题里每一条 `#write` 规则**镜像一份**到这个类上 ——
+ * 右半边照样吃到，而且不再依赖那个不合法的写法。
+ * ─────────────────────────────────────────────────────────────
+ */
+export const WRITE_CLASS = 'bugu-write'
+
+/**
+ * 把选择器里的 `#write` 换成 `.bugu-write`。
+ *
+ * 只留下真的含 `#write` 的那几支 —— 别的支跟稿纸无关，
+ * 镜像过去只会平白多出一堆匹配不上的规则。
+ */
+const WRITE_ID_RE = /#write\b/g
+
+export function mirrorWrite(sel: string): string {
+  const kept: string[] = []
+  for (const one of splitSelectors(sel)) {
+    // ⚠️ 用正则判，不能用 includes('#write') —— 那样 `#writer` 也算数，
+    //    然后原样留下一条根本没换过的选择器
+    WRITE_ID_RE.lastIndex = 0
+    if (!WRITE_ID_RE.test(one)) continue
+    kept.push(one.replace(WRITE_ID_RE, '.' + WRITE_CLASS).trim())
+  }
+  return kept.join(', ')
+}
+
 /** 找到跟 `css[open]` 这个 `{` 配对的 `}`。返回它的下标；找不到就返回末尾 */
 function matchBrace(css: string, open: number): number {
   let depth = 0
@@ -365,7 +406,12 @@ function matchBrace(css: string, open: number): number {
 /** 带块的 at-rule：要钻进去翻，因为里头还是普通规则 */
 const NESTED_AT = /^@(media|supports|layer|container|scope)\b/i
 
-function bridgeBlock(css: string, from: number, to: number, tally: { n: number }): string {
+function bridgeBlock(
+  css: string,
+  from: number,
+  to: number,
+  tally: { n: number; mirrored: number },
+): string {
   let out = ''
   let head = from
   let i = from
@@ -394,10 +440,26 @@ function bridgeBlock(css: string, from: number, to: number, tally: { n: number }
         }
         // @font-face / @keyframes 之类没有选择器，跳过
       } else {
+        const inner = css.slice(i + 1, end)
         const sel = bridgeSelector(prelude)
         if (sel) {
-          out += `${sel}{${guardBody(css.slice(i + 1, end), endsOnPseudo(sel))}}\n`
+          out += `${sel}{${guardBody(inner, endsOnPseudo(sel))}}\n`
           tally.n++
+        }
+        /*
+         * 再镜像一份到 `.bugu-write`，让右半边也吃到。
+         *
+         * 镜像的是**翻译之后**那条（如果有），否则是原样那条 ——
+         * 于是 `#write h1` 变成 `.bugu-write .cm-h1`，
+         * `#write { padding: 15px }` 变成 `.bugu-write { padding: 15px }`。
+         *
+         * 不计进「翻译了几条」那个数：那句话说的是「Markdown 规则改写到行上」，
+         * 镜像只是管道，算进去只会让那个数虚高。
+         */
+        const mir = mirrorWrite(sel || prelude)
+        if (mir) {
+          out += `${mir}{${guardBody(inner, endsOnPseudo(mir))}}\n`
+          tally.mirrored++
         }
       }
       i = end + 1
@@ -420,9 +482,10 @@ function bridgeBlock(css: string, from: number, to: number, tally: { n: number }
  * @returns 翻出来的 CSS 和条数。一条都没有时返回空串。
  */
 export function bridgeMarkdownRules(css: string): { css: string; count: number } {
-  const tally = { n: 0 }
+  const tally = { n: 0, mirrored: 0 }
   const out = bridgeBlock(css, 0, css.length, tally)
-  if (!tally.n) return { css: '', count: 0 }
+  // 只镜像了没翻译，也得产出 —— 那正是「纯调色的主题」在双屏下的情形
+  if (!tally.n && !tally.mirrored) return { css: '', count: 0 }
   const count = tally.n
   return {
     css: `\n/* ↓ 不咕鸟自动翻译：把 #write 里的 Markdown 规则改写到稿纸的行上 */\n${out}`,

@@ -76,6 +76,10 @@ const SMOKE = process.argv.includes('--smoke')
  * Typora 主题一般十几 KB，带 base64 字体的能到几百 KB。给 2MB 已经很宽松，
  * 而它的作用是拦住「手滑选了个 200MB 的文件」—— 那会把界面直接卡死。
  */
+/** 摆到右边的参考文件：认这几种扩展名，最大 2MB */
+const TEXT_EXTS = new Set(['.md', '.txt', '.markdown', '.text', '.log', '.csv', '.json'])
+const MAX_REF_BYTES = 2 * 1024 * 1024
+
 const MAX_THEME_CSS = 2 * 1024 * 1024
 
 async function readThemeCssFile(
@@ -315,6 +319,32 @@ function registerIpc(): void {
    *
    * 文件没了不拦着启动，但要把话带回界面上。
    */
+  /**
+   * 读一个书外的文本文件，摆到双屏右边当参考。
+   *
+   * 三道闸，每一道都要**说清楚为什么**被挡下来 ——
+   * 一个只会「没反应」的拖放，作者只会以为软件坏了。
+   */
+  handle('readAnyText', async (file: string) => {
+    const ext = path.extname(file).toLowerCase()
+    if (!TEXT_EXTS.has(ext)) {
+      throw new Error(`只能摆文本文件（${[...TEXT_EXTS].join('、')}），这个是 ${ext || '没有扩展名'}。`)
+    }
+    const st = await fsp.stat(file)
+    if (st.size > MAX_REF_BYTES) {
+      throw new Error(`这个文件有 ${Math.round(st.size / 1024)} KB，太大了，摆进来会卡。`)
+    }
+    const text = await fsp.readFile(file, 'utf8')
+    /*
+     * UTF-16 的 BOM 会被 utf8 解码成一堆看不懂的字。
+     * 与其显示一屏乱码让作者以为文件坏了，不如直接说「换成 UTF-8」。
+     */
+    if (text.charCodeAt(0) === 0xfffd || text.includes(' ')) {
+      throw new Error('这个文件不像是 UTF-8 文本 —— 换个编码另存一份再试。')
+    }
+    return { text, name: path.basename(file) }
+  })
+
   handle('readThemeCss', async () => {
     const cfg = await loadConfig()
     /*

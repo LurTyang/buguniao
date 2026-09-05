@@ -66,10 +66,25 @@ export type PaneMode =
   | 'own'
   /** 右边跟左边是同一份，共享正文，**不自己存** */
   | 'shared'
+  /** 右边是随手粘进来的一段字。存进配置，不写文件 */
+  | 'scratch'
+  /**
+   * 右边是一份**书外**的文件。**只读。**
+   *
+   * 这是一个有意的保守选择：往作者工作目录之外的文件自动存盘，
+   * 是最容易毁掉别人东西的一种做法 —— 那份文件可能是别人给的稿子、
+   * 可能正被另一个程序打开、可能根本不该被改。
+   * 摆在这儿是为了**对照**，要改就在它自己的编辑器里改。
+   */
+  | 'ref'
 
 export function paneMode(on: boolean, leftPath: string | null, right: RightSide | null): PaneMode {
   if (!on) return 'off'
-  if (!right || !right.path) return 'empty'
+  if (!right) return 'empty'
+  // 便笺没有路径，空的也算「有东西」—— 粘进来之前那一格就该是它
+  if (right.kind === 'scratch') return 'scratch'
+  if (!right.path) return 'empty'
+  if (right.kind === 'file') return 'ref'
   return isSameDoc(leftPath, right) ? 'shared' : 'own'
 }
 
@@ -84,6 +99,16 @@ export function paneMode(on: boolean, leftPath: string | null, right: RightSide 
  */
 export function rightSaves(mode: PaneMode): boolean {
   return mode === 'own'
+}
+
+/**
+ * 右半边该不该把内容存进**配置**（而不是文件）。
+ *
+ * 只有便笺走这条。它不对应任何文件，但也不该关掉软件就没 ——
+ * 摆在那儿对照着改的东西，第二天多半还想接着看。
+ */
+export function rightPersistsScratch(mode: PaneMode): boolean {
+  return mode === 'scratch'
 }
 
 /** 两边要不要接到同一根线上 */

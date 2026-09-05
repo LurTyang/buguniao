@@ -30,6 +30,7 @@ import { tags } from '@lezer/highlight'
 import { searchKeymap } from '@codemirror/search'
 import { isStickyDrag } from '../sticky-drag.js'
 import { type DocLink } from '../pane-link.js'
+import { WRITE_CLASS } from '../write-class.js'
 import { FENCE_RE, lineKindOf } from '../md-line-class.js'
 import { focusMode, smartReplace, typewriterHorizontal, typewriterVertical } from '../editor-writing.js'
 import type { Rule as SmartRule } from '../smart-replace.js'
@@ -362,6 +363,23 @@ export interface EditorProps {
    * 看起来像专注模式坏了，其实是焦点被偷了。
    */
   autoFocus?: boolean
+  /**
+   * 是不是**主**稿纸。
+   *
+   * 只有主稿纸顶着 `id="write"` —— Typora 主题全靠这个 id 找正文，
+   * 但一个页面里 id 不能有两个。副稿纸（双屏右半边）只带类名，
+   * 主题里那些 `#write` 规则由 theme-css.ts 镜像一份到类上，
+   * 所以两块看起来还是一样的。
+   */
+  primary?: boolean
+  /**
+   * 只读。用在双屏右边摆一份**书外**的文件时。
+   *
+   * 往作者工作目录之外的文件自动存盘，是最容易毁掉别人东西的做法 ——
+   * 那份文件可能是别人给的稿子、可能正被另一个程序开着。
+   * 所以摆过来只给看。
+   */
+  readOnly?: boolean
 }
 
 export function Editor({
@@ -369,6 +387,8 @@ export function Editor({
   initialBody,
   link,
   autoFocus = true,
+  primary = true,
+  readOnly = false,
   onChange,
   onSaveRequest,
   onWikiLink,
@@ -396,6 +416,9 @@ export function Editor({
   // 建视图那个 effect 只认 docPath，所以这个值得走 ref
   const autoFocusRef = useRef(autoFocus)
   autoFocusRef.current = autoFocus
+
+  const readOnlyRef = useRef(readOnly)
+  readOnlyRef.current = readOnly
 
   const scriptRef = useRef(script)
   scriptRef.current = script
@@ -434,6 +457,11 @@ export function Editor({
       // 剧本排版用 Compartment 装着，切换时只重配这一项，
       // 不重建编辑器 —— 光标位置和撤销历史都得留着
       EditorState.phrases.of(CM_PHRASES),
+      // 两个都要：readOnly 挡住改动，editable=false 连光标都不给，
+      // 免得作者对着一个能点却敲不进字的地方发愣
+      ...(readOnlyRef.current
+        ? [EditorState.readOnly.of(true), EditorView.editable.of(false)]
+        : []),
       scriptComp.of(scriptMode.of(scriptRef.current)),
       castComp.of(scriptCast.of(castRef.current ?? emptyCast())),
       history(),
@@ -703,7 +731,20 @@ export function Editor({
    * 引用、代码块）。稿纸容器顶着这个 id，那些规则就直接落在稿纸上，
    * 不用我们去翻译任何一条 —— 翻译就得猜它在干什么，而每份主题写法都不一样。
    */
-  return <div id="write" className="paper-inner" ref={hostRef} />
+  /*
+   * `id` 只给主稿纸，类名两块都有。
+   *
+   * 实测过：id 重复时 CSS 照样两块都命中，所以从前那样也「能用」——
+   * 但那是不合法的 HTML，而且任何 `querySelector('#write')`
+   * 都会悄悄只拿到左边那块。
+   */
+  return (
+    <div
+      {...(primary ? { id: 'write' } : {})}
+      className={`paper-inner ${WRITE_CLASS}`}
+      ref={hostRef}
+    />
+  )
 }
 
 /**

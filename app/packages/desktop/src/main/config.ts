@@ -157,6 +157,14 @@ export interface UserConfig {
   splitRight: RightSide | null
   /** 左边占的比例，0.2–0.8。见 renderer/split.ts */
   splitRatio: number
+  /**
+   * 随手粘在右边那一段字（`splitRight.kind === 'scratch'` 时用）。
+   *
+   * 存在配置里而不是文件里：它是**临时**参考，为它建个文件就得回答
+   * 「存哪儿、什么时候删」，而那两个问题作者根本不想回答。
+   * 有上限，见 main/index.ts 的 MAX_SCRATCH。
+   */
+  splitScratch: string
   /** 稿纸上下留白（像素）。0 = 老样子，顶着边 */
   pagePadY: number
   /**
@@ -229,6 +237,7 @@ const DEFAULTS: Omit<UserConfig, 'deviceId'> = {
   splitOn: false,
   splitRight: null,
   splitRatio: 0.5,
+  splitScratch: '',
   pagePadY: 0,
   paraIndent: 2,
   // 智能替换默认开着：中文标点是每天几百次的摩擦，

@@ -41,6 +41,7 @@ const api = {
   renameThemeSlot: (slot: number, name: string) => call<unknown>('renameThemeSlot', slot, name),
   exportBundle: (b: string, o: unknown, t: string) => call<unknown>('exportBundle', b, o, t),
   readThemeCss: () => call<unknown>('readThemeCss'),
+  readAnyText: (p: string) => call<unknown>('readAnyText', p),
   exportThemeCss: (d: unknown) => call<unknown>('exportThemeCss', d),
   saveThemeToSlot: (slot: number, d: unknown) => call<unknown>('saveThemeToSlot', slot, d),
   pickFont: () => call<unknown>('pickFont'),

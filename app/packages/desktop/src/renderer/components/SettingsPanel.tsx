@@ -870,6 +870,7 @@ export async function loadSettings(): Promise<UserSettings> {
       splitOn: false,
       splitRight: null,
       splitRatio: 0.5,
+      splitScratch: '',
       pagePadY: 0,
       paraIndent: 2,
       smartReplace: true,

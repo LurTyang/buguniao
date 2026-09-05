@@ -16,12 +16,14 @@ import {
   paneMode,
   ratioFromDrag,
   rightFollowsLeft,
+  rightPersistsScratch,
   rightSaves,
   type RightSide,
 } from './split.js'
 
 const doc = (path: string): RightSide => ({ kind: 'doc', path })
 const file = (path: string): RightSide => ({ kind: 'file', path })
+const scratch = (): RightSide => ({ kind: 'scratch', path: '' })
 
 describe('分隔线的位置', () => {
   it('夹在 0.2–0.8 之间 —— 再窄一行中文都摆不下', () => {
@@ -77,8 +79,13 @@ describe('右半边处于哪种状态', () => {
     expect(paneMode(true, 'a.md', doc('a.md'))).toBe('shared')
   })
 
-  it('外部参考文档算 own', () => {
-    expect(paneMode(true, 'a.md', file('D:/别处/资料.md'))).toBe('own')
+  it('【关键】外部文件算 ref —— 只读，绝不往书外面的文件写', () => {
+    expect(paneMode(true, 'a.md', file('D:/别处/资料.md'))).toBe('ref')
+    expect(rightSaves('ref')).toBe(false)
+  })
+
+  it('便笺没有路径，但空着也算「有东西」—— 粘进来之前那一格就该是它', () => {
+    expect(paneMode(true, 'a.md', scratch())).toBe('scratch')
   })
 })
 
@@ -91,9 +98,24 @@ describe('【关键】谁负责存盘', () => {
     expect(rightSaves('own')).toBe(true)
   })
 
+  it('【关键】书外的文件一律不写 —— 那可能是别人给的稿子', () => {
+    expect(rightSaves('ref')).toBe(false)
+  })
+
   it('没开、空着都不存', () => {
     expect(rightSaves('off')).toBe(false)
     expect(rightSaves('empty')).toBe(false)
+  })
+
+  it('【关键】便笺不写文件 —— 它压根不对应硬盘上任何东西', () => {
+    expect(rightSaves('scratch')).toBe(false)
+  })
+
+  it('便笺存进配置，别的都不', () => {
+    expect(rightPersistsScratch('scratch')).toBe(true)
+    for (const m of ['off', 'empty', 'own', 'shared', 'ref'] as const) {
+      expect(rightPersistsScratch(m)).toBe(false)
+    }
   })
 })
 
@@ -106,7 +128,7 @@ describe('什么时候要接那根线', () => {
   })
 
   it('「接线」和「自己存」是互斥的 —— 两个都真就是那个丢稿的组合', () => {
-    for (const m of ['off', 'empty', 'own', 'shared'] as const) {
+    for (const m of ['off', 'empty', 'own', 'shared', 'scratch', 'ref'] as const) {
       expect(needsLink(m) && rightSaves(m)).toBe(false)
     }
   })

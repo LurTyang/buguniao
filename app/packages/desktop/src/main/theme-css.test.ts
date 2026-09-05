@@ -12,8 +12,10 @@
 import { describe, expect, it } from 'vitest'
 import path from 'node:path'
 import {
+  WRITE_CLASS,
   absolutizeUrls,
   guardBody,
+  mirrorWrite,
   bridgeMarkdownRules,
   bridgeSelector,
   resolveThemeCss,
@@ -329,5 +331,46 @@ describe('resolveThemeCss 会把翻译追加在后面', () => {
   it('纯调色的主题翻不出东西，bridged 是 0', async () => {
     const r = await resolveThemeCss(at('a.css'), disk({ [at('a.css')]: ':root{--bg-color:#fff}' }))
     expect(r.bridged).toBe(0)
+  })
+})
+
+describe('镜像到 .bugu-write（双屏的右半边也要吃到主题）', () => {
+  it('#write 换成类名', () => {
+    expect(mirrorWrite('#write h1')).toBe(`.${WRITE_CLASS} h1`)
+    expect(mirrorWrite('#write')).toBe(`.${WRITE_CLASS}`)
+  })
+
+  it('不含 #write 的一支丢掉 —— 跟稿纸无关，镜像过去只是白多一条', () => {
+    expect(mirrorWrite('.sidebar h1')).toBe('')
+    expect(mirrorWrite('#write h1, .sidebar h1')).toBe(`.${WRITE_CLASS} h1`)
+  })
+
+  it('不会误伤 #writer 这种更长的 id', () => {
+    expect(mirrorWrite('#writer h1')).toBe('')
+  })
+
+  it('伪元素跟着过来', () => {
+    expect(mirrorWrite('#write::before')).toBe(`.${WRITE_CLASS}::before`)
+  })
+
+  it('【关键】翻译过的那条也镜像一份 —— 右半边的标题才会跟着变', () => {
+    const r = bridgeMarkdownRules('#write h1{font-size:3em}')
+    expect(r.css).toContain('#write .cm-h1{font-size:3em}')
+    expect(r.css).toContain(`.${WRITE_CLASS} .cm-h1{font-size:3em}`)
+  })
+
+  it('【关键】没东西可翻译的 #write 规则也镜像 —— 纸色、内边距靠它', () => {
+    const r = bridgeMarkdownRules('#write{padding:15px}')
+    // 翻译条数是 0（本来就没有 Markdown 元素），但产出不能是空的
+    expect(r.count).toBe(0)
+    expect(r.css).toContain(`.${WRITE_CLASS}{padding:15px}`)
+  })
+
+  it('镜像不计进「翻译了几条」—— 那个数是报给作者看的，不能虚高', () => {
+    expect(bridgeMarkdownRules('#write h1{color:red}').count).toBe(1)
+  })
+
+  it('跟稿纸无关的规则一条都不产出', () => {
+    expect(bridgeMarkdownRules('body{color:red}').css).toBe('')
   })
 })

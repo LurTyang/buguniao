@@ -30,7 +30,7 @@ import { Editor, type EditorProps } from './Editor.js'
 import { Boom } from './Boom.js'
 import type { DocLink } from '../pane-link.js'
 import type { PaneMode, RightSide } from '../split.js'
-import { rightSaves } from '../split.js'
+import { rightPersistsScratch, rightSaves } from '../split.js'
 
 const api = window.bugu
 
@@ -53,6 +53,12 @@ export interface SidePaneProps {
   /** 换一份 / 关掉 */
   onPickDoc(): void
   onClose(): void
+  /** 拖进来一个书外的文件，或者粘进来一段字 */
+  onDropFile(path: string): void
+  onPasteScratch(text: string): void
+  /** 便笺的内容（`kind==='scratch'` 时用），以及改了之后往哪儿写 */
+  scratch: string
+  onScratchChange(text: string): void
   /** 右边标题栏上显示的名字 */
   title: string
 }
@@ -77,6 +83,7 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
 
   const path = right?.path ?? ''
   const saves = rightSaves(mode)
+  const isScratch = rightPersistsScratch(mode)
 
   /*
    * 读内容。
@@ -87,6 +94,13 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
   useEffect(() => {
     let dead = false
     setReady(false)
+    if (mode === 'scratch') {
+      setBody(props.scratch)
+      bodyRef.current = props.scratch
+      setErr('')
+      setReady(true)
+      return
+    }
     if (mode === 'shared') {
       setBody(sharedBody)
       bodyRef.current = sharedBody
@@ -94,17 +108,18 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
       setReady(true)
       return
     }
-    if (mode !== 'own' || !path) {
+    if ((mode !== 'own' && mode !== 'ref') || !path) {
       setBody('')
       bodyRef.current = ''
       return
     }
     void (async () => {
       try {
-        const d = await api.readDoc(path)
+        // 书里的走 readDoc（认元信息、认版本），书外的走 readAnyText（只读一段字）
+        const text = mode === 'ref' ? (await api.readAnyText(path)).text : (await api.readDoc(path)).body
         if (dead) return
-        setBody(d.body)
-        bodyRef.current = d.body
+        setBody(text)
+        bodyRef.current = text
         setErr('')
         setReady(true)
       } catch (e) {
@@ -141,16 +156,51 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
   const onChange = useCallback(
     (next: string) => {
       bodyRef.current = next
+      if (isScratch) {
+        // 便笺存进配置，节流一下 —— 每敲一个字写一次盘太蠢
+        window.clearTimeout(timer.current)
+        timer.current = window.setTimeout(() => props.onScratchChange(next), 600)
+        return
+      }
       if (!saves) return
       setDirty(true)
       window.clearTimeout(timer.current)
       timer.current = window.setTimeout(() => void flush(), AUTOSAVE_MS)
     },
-    [saves, flush],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [saves, isScratch, flush],
+  )
+
+  /*
+   * 拖一个文件进来。
+   *
+   * 比「点按钮弹文件框」顺手得多 —— 作者手边那份参考多半正开在
+   * 资源管理器里，拖过来是一个动作，而弹框要点四五下。
+   *
+   * Electron 里 File 对象带 `path`，所以拿得到真实路径。
+   */
+  const onDrop = useCallback(
+    (e: React.DragEvent) => {
+      const f = e.dataTransfer.files[0] as (File & { path?: string }) | undefined
+      if (!f?.path) return
+      e.preventDefault()
+      props.onDropFile(f.path)
+    },
+    [props],
   )
 
   return (
-    <div className="side-pane">
+    <div
+      className="side-pane"
+      onDragOver={(e) => {
+        // 只在拖的是文件时接管。拖便利贴那种有它自己的一套
+        if (e.dataTransfer.types.includes('Files')) {
+          e.preventDefault()
+          e.dataTransfer.dropEffect = 'copy'
+        }
+      }}
+      onDrop={onDrop}
+    >
       <div className="side-head">
         <span className="side-title" title={path}>
           {title || '（空的）'}
@@ -159,6 +209,13 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
           // 说清楚这不是第二份 —— 不然「我改了两遍」这种误会很容易发生
           <span className="side-tag">同一篇</span>
         )}
+        {mode === 'ref' && (
+          // 说清楚为什么敲不进字。不说的话作者会以为是坏了
+          <span className="side-tag" title="书外面的文件只给看，不改也不存">
+            只读
+          </span>
+        )}
+        {mode === 'scratch' && <span className="side-tag">便笺</span>}
         {saves && dirty && <span className="side-tag">未保存</span>}
         <button className="side-btn" onClick={props.onPickDoc} title="换一份">
           换
@@ -171,13 +228,31 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
       {err && <div className="side-err">{err}</div>}
 
       <div className="side-body">
-        {!ready && path && mode !== 'empty' ? (
+        {!ready && path && mode !== 'empty' && mode !== 'scratch' ? (
           <div className="side-empty">读着…</div>
-        ) : mode === 'empty' || !path ? (
-          <div className="side-empty">
+        ) : mode === 'empty' || (!path && mode !== 'scratch') ? (
+          /*
+           * 空着的时候，三条路都摆在明面上。
+           *
+           * 这一格本身就是投放区和粘贴区 —— 说出来，
+           * 不然没人会想到「原来能往这儿拖」。
+           */
+          <div
+            className="side-empty"
+            tabIndex={0}
+            onPaste={(e) => {
+              const t = e.clipboardData.getData('text/plain')
+              if (!t.trim()) return
+              e.preventDefault()
+              props.onPasteScratch(t)
+            }}
+          >
             <p>右边还空着。</p>
+            <p className="side-empty-how">
+              把文件拖进来，或者点一下这儿直接粘一段字。
+            </p>
             <button className="btn" onClick={props.onPickDoc}>
-              挑一篇摆过来
+              挑本书里的一篇
             </button>
           </div>
         ) : (
@@ -185,11 +260,14 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
             <Editor
               // 换文档要整个重建：撤销历史、那根线都得跟着换
               key={`${mode}:${path}`}
-              docPath={path}
+              docPath={path || 'scratch'}
               initialBody={body}
               link={mode === 'shared' ? link : null}
               // 右半边比左边晚建好，抢焦点会把正在写字的人的光标偷走
               autoFocus={false}
+              // 副稿纸不顶 id="write" —— 一个页面里 id 不能有两个
+              primary={false}
+              readOnly={mode === 'ref'}
               onChange={onChange}
               onSaveRequest={() => void flush()}
               writing={props.writing}

@@ -1217,6 +1217,35 @@ export function runSmoke(win: BrowserWindow, tempRoot: string): void {
             await new Promise<void>((r) => {
               win.webContents.once('did-finish-load', () => setTimeout(r, 1200))
             })
+            /*
+             * 跑探针之前先让窗口真的拿到焦点。
+             *
+             * 不这么做的话 `view.focus()` 有时是空操作 —— 窗口自己都没被
+             * 系统选中，里头的元素当然拿不到焦点。于是专注模式那一步
+             * 时灵时不灵，而它测的其实是环境，不是产品。
+             */
+            /*
+             * 等窗口**真的**拿到焦点，再跑探针。
+             *
+             * 只调一次 focus() 不够：拿不拿得到由系统说了算，
+             * 而 `view.focus()` 在窗口没被选中时是空操作 ——
+             * 于是专注模式那一步时灵时不灵，测的是环境不是产品。
+             *
+             * 拿不到也不静默跳过：**记一条 problem**。
+             * 一个悄悄跳过的检查比没有这个检查更坏。
+             */
+            let hasFocus = false
+            for (let k = 0; k < 20 && !hasFocus; k++) {
+              win.show()
+              win.focus()
+              win.webContents.focus()
+              await new Promise<void>((r) => setTimeout(r, 150))
+              hasFocus = (await win.webContents.executeJavaScript('document.hasFocus()')) as boolean
+            }
+            if (!hasFocus) {
+              problems.push('窗口一直拿不到系统焦点 —— 靠焦点的那几步测不准，别当成产品的毛病。')
+            }
+
             const opened = (await win.webContents.executeJavaScript(OPEN_BOOK_SCRIPT)) as {
               ok: boolean
               detail: string
@@ -1224,6 +1253,7 @@ export function runSmoke(win: BrowserWindow, tempRoot: string): void {
               bridgeHit: boolean
               focusBits: string
               splitBits: string
+              writeBits: string
             }
             steps.push({ name: '【关键】点开一本书之后稿纸不是白的', ok: opened.ok, detail: opened.detail })
             /*
@@ -1293,6 +1323,29 @@ export function runSmoke(win: BrowserWindow, tempRoot: string): void {
               ok: !focusedRight,
               detail: opened.focusBits.slice(opened.focusBits.indexOf(' | ')),
             })
+            /*
+             * 两块稿纸都要吃到主题，而 `id="write"` 只能有一个。
+             *
+             * 这两件事必须一起验：只验前者的话，靠重复 id 也能过（实测过，
+             * CSS 是按属性匹配的）—— 而那是不合法的 HTML，
+             * 任何 querySelector('#write') 都会悄悄只拿到左边那块。
+             */
+            let wb: { papers?: number; ids?: number; perPane?: unknown[] } = {}
+            try {
+              wb = JSON.parse(opened.writeBits) as typeof wb
+            } catch {
+              wb = {}
+            }
+            steps.push({
+              name: '【关键】两块稿纸都吃到同一份主题',
+              ok: wb.papers === 2 && (wb.perPane ?? []).every((x) => x === true),
+              detail: opened.writeBits,
+            })
+            steps.push({
+              name: 'id="write" 只有一个（HTML 里 id 不能重复）',
+              ok: wb.ids === 1,
+              detail: opened.writeBits,
+            })
             steps.push({
               name: '双屏：两块编辑器都在',
               ok: split.panes === 2,
@@ -1343,7 +1396,7 @@ const OPEN_BOOK_SCRIPT = `(async () => {
 
     const cards = Array.from(document.querySelectorAll('.book-card'))
       .filter(function (el) { return el.className.indexOf('idea-card') < 0 })
-    if (cards.length === 0) return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', detail: '书架上一本书都没有，点不进去' }
+    if (cards.length === 0) return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', detail: '书架上一本书都没有，点不进去' }
 
     cards[0].click()
     for (var i = 0; i < 40; i++) {
@@ -1352,7 +1405,7 @@ const OPEN_BOOK_SCRIPT = `(async () => {
     }
     await sleep(500)
 
-    if (!has('.work')) return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', detail: '点了之后没有 .work' }
+    if (!has('.work')) return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', detail: '点了之后没有 .work' }
 
     // 目录树里点开第一篇 —— 进书之后默认可能没打开任何文档
     var docs = Array.from(document.querySelectorAll('.tree-chapter, .tree-item'))
@@ -1360,7 +1413,7 @@ const OPEN_BOOK_SCRIPT = `(async () => {
 
     // 稿纸这条链上谁在画不透明背景 —— Typora 主题靠 #write 及其
     // ::before 上色，链上任何一层不透明都会把它盖掉
-    var chain = ['.work', '.paper', '#write', '.cm-editor', '.cm-scroller', '.cm-content']
+    var chain = ['.work', '.paper', '.bugu-write', '.cm-editor', '.cm-scroller', '.cm-content']
     var paints = chain.map(function (sel) {
       var n = document.querySelector(sel)
       if (!n) return sel + '=无'
@@ -1386,10 +1439,10 @@ const OPEN_BOOK_SCRIPT = `(async () => {
     var cmText = cm ? (cm.innerText || '').replace(/\s+/g, '') : ''
 
     if (!bits.editor) {
-      return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', detail: '稿纸里没有编辑器：' + JSON.stringify(bits) }
+      return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', detail: '稿纸里没有编辑器：' + JSON.stringify(bits) }
     }
     if (cmText.length === 0) {
-      return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', detail: '编辑器在但一个字都没有：' + JSON.stringify(bits) }
+      return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', detail: '编辑器在但一个字都没有：' + JSON.stringify(bits) }
     }
     /*
      * 实地验一次「翻译出来的选择器到底命不命中」。
@@ -1511,10 +1564,28 @@ const OPEN_BOOK_SCRIPT = `(async () => {
     }
 
     var probe = document.createElement('style')
-    probe.textContent = '#write .cm-p{color:rgb(1,2,3) !important}'
+    probe.textContent = '.bugu-write .cm-p{color:rgb(1,2,3) !important}'
     document.head.appendChild(probe)
-    var target = document.querySelector('#write .cm-p')
+    /*
+     * 两半边都要吃到同一份主题。
+     *
+     * 开双屏之后页面上有**两个 id="write"**。HTML 里 id 重复是不合法的，
+     * 但 CSS 的 id 选择器是按属性匹配的 —— 重复的照样全都命中。
+     * 这一条就是来确认这件事的：别靠推理，量一次。
+     */
+    var papers = Array.prototype.slice.call(document.querySelectorAll('.bugu-write'))
+    var perPane = papers.map(function (w) {
+      var one = w.querySelector('.cm-p')
+      return one ? getComputedStyle(one).color === 'rgb(1, 2, 3)' : null
+    })
+    var target = document.querySelector('.bugu-write .cm-p')
     var hit = !!target && getComputedStyle(target).color === 'rgb(1, 2, 3)'
+    var writeBits = JSON.stringify({
+      papers: papers.length,
+      // id 只能有一个 —— 有两个就是又把不合法的写法写回来了
+      ids: document.querySelectorAll('[id="write"]').length,
+      perPane: perPane,
+    })
     probe.remove()
 
     return {
@@ -1522,11 +1593,12 @@ const OPEN_BOOK_SCRIPT = `(async () => {
       bridgeHit: hit,
       focusBits: focusBits,
       splitBits: splitBits,
+      writeBits: writeBits,
       classed: bits.classed,
       detail: '正文 ' + cmText.length + ' 个字，' + JSON.stringify(bits),
     }
   } catch (e) {
-    return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', detail: '点开时抛了：' + String((e && e.message) || e) }
+    return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', detail: '点开时抛了：' + String((e && e.message) || e) }
   }
 })()`
 

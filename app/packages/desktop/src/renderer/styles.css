@@ -4736,3 +4736,15 @@ button.links-item:hover {
   color: var(--danger);
   flex: 0 0 auto;
 }
+
+/* 空着的右半边：它本身就是投放区和粘贴区，得说出来 */
+.side-empty-how {
+  margin: 4px 0 10px;
+  font-size: 12px;
+  color: var(--md-char-color);
+}
+.side-empty:focus {
+  outline: 1px dashed var(--primary-color);
+  outline-offset: 8px;
+  border-radius: 6px;
+}

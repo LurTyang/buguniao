@@ -1548,6 +1548,32 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
               onPickDoc={() => setPickingRight(true)}
               onClose={() => onSettingsChange({ splitOn: false })}
               title={rightTitle}
+              scratch={settings.splitScratch ?? ''}
+              onScratchChange={(t) => onSettingsChange({ splitScratch: t })}
+              onPasteScratch={(t) => {
+                onSettingsChange({
+                  splitOn: true,
+                  splitRight: { kind: 'scratch', path: '' },
+                  splitScratch: t,
+                })
+              }}
+              onDropFile={(p) => {
+                /*
+                 * 拖进来之前先读一遍。
+                 *
+                 * 读不了的话（太大、不是文本、编码不对）当场说清楚 ——
+                 * 而不是先把它设成右半边、再让右半边显示一行错误。
+                 * 后者会把原来摆着的那份参考挤掉，换来一句报错。
+                 */
+                void api
+                  .readAnyText(p)
+                  .then(() => {
+                    onSettingsChange({ splitOn: true, splitRight: { kind: 'file', path: p } })
+                  })
+                  .catch((e: unknown) => {
+                    flash(e instanceof Error ? e.message : String(e))
+                  })
+              }}
             />
           </>
         )}
