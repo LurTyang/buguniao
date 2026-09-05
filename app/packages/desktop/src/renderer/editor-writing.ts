@@ -24,6 +24,59 @@ import { replaceOn, type Rule } from './smart-replace.js'
  * 把它滚到中间 —— 光靠 scrollMargin 只能保证「不贴边」，
  * 保证不了「停在同一个高度」。
  */
+/**
+ * 这一次更新该不该把光标滚回中间。
+ *
+ * ─────────────────────────────────────────────────────────────
+ * 【为什么需要它 —— 作者报的那个「过于敏感」】
+ *
+ * 初版是「文档变了**或者选区变了**就回中」。听起来对，实际很难用：
+ *
+ *   · 鼠标拖着选一段，每动一下选区都变一次 —— 于是稿纸在你拖的时候
+ *     一直在往中间蹿，你在追一个会跑的目标。
+ *   · 就算只在当前行点一下，也会滑 —— 因为「居中」本身就意味着
+ *     把那一行挪到屏幕中间去。人只是想把光标放那儿，没想让纸动。
+ *
+ * 打字机模式要的是「**写**的时候纸在走」，不是「碰一下就走」。
+ * 所以判断按下面三条：
+ *
+ *   1. 选中了一片东西 → **一律不动**。这时候人在读、在挑，不是在写。
+ *   2. 文档真的变了（打字、删字）→ 回中。这是它存在的理由。
+ *   3. 只是光标动了 → 鼠标点的不动，键盘移的才动。
+ *
+ * 第 3 条那个分界是关键：键盘移光标是「我在往下写」的一部分，
+ * 鼠标点是「我要去看看那儿」—— 后者本来就已经看得见了，不该再滚。
+ * ─────────────────────────────────────────────────────────────
+ */
+export function shouldRecenter(o: {
+  docChanged: boolean
+  selectionSet: boolean
+  /** 选区是一片，不是一个光标 */
+  ranged: boolean
+  /** 这次更新里有「鼠标在选」这种操作 */
+  byPointer: boolean
+}): boolean {
+  if (o.ranged) return false
+  if (o.docChanged) return true
+  if (!o.selectionSet) return false
+  return !o.byPointer
+}
+
+/** 从一次更新里读出上面那四个判据 */
+function recenterFacts(u: ViewUpdate): {
+  docChanged: boolean
+  selectionSet: boolean
+  ranged: boolean
+  byPointer: boolean
+} {
+  return {
+    docChanged: u.docChanged,
+    selectionSet: u.selectionSet,
+    ranged: !u.state.selection.main.empty,
+    byPointer: u.transactions.some((tr) => tr.isUserEvent('select.pointer')),
+  }
+}
+
 export function typewriterVertical(): Extension {
   return [
     // 上下各留半屏：文档最后一行也要能被滚到屏幕中间
@@ -32,8 +85,8 @@ export function typewriterVertical(): Extension {
       return { top: h / 2, bottom: h / 2 }
     }),
     EditorView.updateListener.of((u) => {
-      if (!u.docChanged && !u.selectionSet) return
-      // 只在光标真的动了时滚。u.view.requestMeasure 里做，避免布局还没算完
+      if (!shouldRecenter(recenterFacts(u))) return
+      // 布局还没算完时滚会滚错位置，所以放进 requestMeasure
       u.view.requestMeasure({
         read: () => null,
         write: () => {
@@ -60,7 +113,7 @@ export function typewriterHorizontal(): Extension {
       return { left: w / 2, right: w / 2 }
     }),
     EditorView.updateListener.of((u) => {
-      if (!u.docChanged && !u.selectionSet) return
+      if (!shouldRecenter(recenterFacts(u))) return
       u.view.requestMeasure({
         read: () => null,
         write: () => {

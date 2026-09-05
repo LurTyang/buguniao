@@ -17,7 +17,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { EditorState } from '@codemirror/state'
-import { focusKeep } from './editor-writing.js'
+import { focusKeep, shouldRecenter } from './editor-writing.js'
 
 /** 把光标放在第 n 行第 col 个字符处，返回亮着的行号区间 */
 function keepAt(lines: string[], n: number, col = 0): [number, number] {
@@ -78,5 +78,47 @@ describe('专注模式：亮哪几行', () => {
 
   it('空文档不炸', () => {
     expect(keepAt([''], 1)).toEqual([1, 1])
+  })
+})
+
+describe('打字机模式：什么时候才把光标滚回中间', () => {
+  const f = (o: Partial<Parameters<typeof shouldRecenter>[0]>) =>
+    shouldRecenter({
+      docChanged: false,
+      selectionSet: false,
+      ranged: false,
+      byPointer: false,
+      ...o,
+    })
+
+  it('打字时回中 —— 这是打字机模式存在的理由', () => {
+    expect(f({ docChanged: true, selectionSet: true })).toBe(true)
+  })
+
+  it('【关键】鼠标拖着选一段时不动 —— 不然人在追一个会跑的目标', () => {
+    expect(f({ selectionSet: true, ranged: true, byPointer: true })).toBe(false)
+  })
+
+  it('【关键】在当前行点一下也不动', () => {
+    // 作者报的：「即使鼠标停在选中的当前行，也会往上下滑动」
+    // 因为「居中」本身就意味着把那一行挪到屏幕中间去
+    expect(f({ selectionSet: true, byPointer: true })).toBe(false)
+  })
+
+  it('选中了一片就一律不动，键盘选的也一样 —— 这时候人在读不在写', () => {
+    expect(f({ selectionSet: true, ranged: true })).toBe(false)
+    expect(f({ docChanged: true, ranged: true })).toBe(false)
+  })
+
+  it('键盘移光标要回中 —— 那是「往下写」的一部分', () => {
+    expect(f({ selectionSet: true })).toBe(true)
+  })
+
+  it('什么都没发生就不动', () => {
+    expect(f({})).toBe(false)
+  })
+
+  it('滚动、重绘之类的更新不触发', () => {
+    expect(f({ docChanged: false, selectionSet: false, byPointer: true })).toBe(false)
   })
 })
