@@ -4638,3 +4638,101 @@ button.links-item:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ── 双屏（0.5）────────────────────────────────────────────
+ *
+ * 规范：更新文档/11-0.5规划.md §1
+ *
+ * 比例走一个 CSS 变量。拖分隔线时只改这个变量，
+ * 松手才写进配置 —— 每移动一像素写一次盘太蠢。
+ */
+.work-body.split > .paper {
+  flex: 0 0 auto;
+  width: calc(var(--split-ratio, 0.5) * 100%);
+}
+
+.split-grip {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: var(--window-border);
+  /* 中间那道线细一点，但**可点区域要宽** —— 一条 1px 的线抓不住 */
+  background-clip: content-box;
+  padding: 0 2px;
+  box-sizing: border-box;
+}
+.split-grip:hover {
+  background-color: var(--primary-color);
+}
+
+.side-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--window-border);
+}
+
+.side-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--window-border);
+  background: var(--side-bar-bg-color);
+  font-size: 12px;
+  flex: 0 0 auto;
+}
+.side-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--control-text-color);
+}
+.side-tag {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--item-hover-bg-color);
+  color: var(--control-text-color);
+  font-size: 11px;
+}
+.side-btn {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--control-text-color);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.side-btn:hover {
+  background: var(--item-hover-bg-color);
+  color: var(--text-color);
+}
+
+.side-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.side-body > * {
+  flex: 1;
+  min-width: 0;
+}
+.side-empty {
+  margin: auto;
+  text-align: center;
+  color: var(--control-text-color);
+  font-size: 13px;
+}
+.side-err {
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--danger);
+  flex: 0 0 auto;
+}

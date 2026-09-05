@@ -1201,7 +1201,11 @@ export function runSmoke(win: BrowserWindow, tempRoot: string): void {
                 const t = await window.bugu.loadTree(b.rootPath || b.path)
                 const ch = (t.text || [])[0]
                 if (!ch) return 'no-chapter'
-                await window.bugu.saveDoc(ch.path, '第一行连着写。\\n第二行也连着写。\\n第三行还是连着写。\\n')
+                var many = ['第一行连着写。', '第二行也连着写。', '第三行还是连着写。']
+                for (var i = 4; i <= 60; i++) many.push('第' + i + '行，凑够长度好让右半边能滚起来。')
+                await window.bugu.saveDoc(ch.path, many.join('\\n') + '\\n')
+                // 双屏：右边摆同一篇 —— 那正是「一份文档两个视图」那条路
+                await window.bugu.updateSettings({ splitOn: true, splitRight: { kind: 'doc', path: ch.path } })
                 await window.bugu.updateSettings({ focusMode: true })
                 return 'ok'
               } catch (e) { return 'err: ' + String((e && e.message) || e) }
@@ -1219,6 +1223,7 @@ export function runSmoke(win: BrowserWindow, tempRoot: string): void {
               classed: number
               bridgeHit: boolean
               focusBits: string
+              splitBits: string
             }
             steps.push({ name: '【关键】点开一本书之后稿纸不是白的', ok: opened.ok, detail: opened.detail })
             /*
@@ -1258,6 +1263,52 @@ export function runSmoke(win: BrowserWindow, tempRoot: string): void {
               detail: opened.focusBits,
             })
 
+            /*
+             * 双屏。两条断言各管一头：
+             *   · grew > 0   —— 那根线通了，右边真的跟着变
+             *   · moved === 0 —— 右边**一动不动**，这是作者定死的
+             * 只验前一条的话，一个「跟着变但也跟着跳」的实现照样全绿，
+             * 而那正是最烦人的那种坏法。
+             */
+            let split: { panes?: number; moved?: number; grew?: number } = {}
+            try {
+              split = JSON.parse(opened.splitBits) as typeof split
+            } catch {
+              split = {}
+            }
+            /*
+             * 焦点归谁，单独钉一条 —— 但要钉在**对的那件事**上。
+             *
+             * 第一版写的是「进来时左半边必须有焦点」，结果时灵时不灵：
+             * 冒烟窗口有时还没拿到系统焦点，那时候 `view.focus()` 是空操作，
+             * 谁都没有焦点。那是跑测试的环境，不是产品的毛病。
+             *
+             * 真正该报警的是**右半边抢了焦点** —— 对正在左边写字的人来说，
+             * 那是「光标忽然没了」。所以断言改成：焦点可以在左边、
+             * 也可以暂时不在任何人身上，**但绝不能在右边**。
+             */
+            const focusedRight = /focusedIdx=(?:\d+\/)*1(?:\/|)/.test(opened.focusBits)
+            steps.push({
+              name: '【关键】右半边不许抢焦点',
+              ok: !focusedRight,
+              detail: opened.focusBits.slice(opened.focusBits.indexOf(' | ')),
+            })
+            steps.push({
+              name: '双屏：两块编辑器都在',
+              ok: split.panes === 2,
+              detail: opened.splitBits,
+            })
+            steps.push({
+              name: '【关键】左边打字，右边跟着变（那根线通了）',
+              ok: (split.grew ?? 0) > 0,
+              detail: opened.splitBits,
+            })
+            steps.push({
+              name: '【关键】左边打字，右边一动不动（滚动绝不同步）',
+              ok: split.moved === 0,
+              detail: opened.splitBits,
+            })
+
             for (const s of steps) {
               if (!s.ok) problems.push(`步骤失败「${s.name}」${s.detail ? ' —— ' + s.detail : ''}`)
             }
@@ -1292,7 +1343,7 @@ const OPEN_BOOK_SCRIPT = `(async () => {
 
     const cards = Array.from(document.querySelectorAll('.book-card'))
       .filter(function (el) { return el.className.indexOf('idea-card') < 0 })
-    if (cards.length === 0) return { ok: false, classed: 0, bridgeHit: false, focusBits: '', detail: '书架上一本书都没有，点不进去' }
+    if (cards.length === 0) return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', detail: '书架上一本书都没有，点不进去' }
 
     cards[0].click()
     for (var i = 0; i < 40; i++) {
@@ -1301,7 +1352,7 @@ const OPEN_BOOK_SCRIPT = `(async () => {
     }
     await sleep(500)
 
-    if (!has('.work')) return { ok: false, classed: 0, bridgeHit: false, focusBits: '', detail: '点了之后没有 .work' }
+    if (!has('.work')) return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', detail: '点了之后没有 .work' }
 
     // 目录树里点开第一篇 —— 进书之后默认可能没打开任何文档
     var docs = Array.from(document.querySelectorAll('.tree-chapter, .tree-item'))
@@ -1335,10 +1386,10 @@ const OPEN_BOOK_SCRIPT = `(async () => {
     var cmText = cm ? (cm.innerText || '').replace(/\s+/g, '') : ''
 
     if (!bits.editor) {
-      return { ok: false, classed: 0, bridgeHit: false, focusBits: '', detail: '稿纸里没有编辑器：' + JSON.stringify(bits) }
+      return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', detail: '稿纸里没有编辑器：' + JSON.stringify(bits) }
     }
     if (cmText.length === 0) {
-      return { ok: false, classed: 0, bridgeHit: false, focusBits: '', detail: '编辑器在但一个字都没有：' + JSON.stringify(bits) }
+      return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', detail: '编辑器在但一个字都没有：' + JSON.stringify(bits) }
     }
     /*
      * 实地验一次「翻译出来的选择器到底命不命中」。
@@ -1361,7 +1412,15 @@ const OPEN_BOOK_SCRIPT = `(async () => {
      * 所以要**数**：亮着的必须正好是光标那一行。
      */
     var focusBits = 'no-lines'
-    var lines = Array.prototype.slice.call(document.querySelectorAll('.cm-line'))
+    /*
+     * ⚠️ 只数**左半边**的行。
+     *
+     * 开了双屏之后 document 里有两份 .cm-line，右半边那份因为没焦点
+     * 而全部正常（0.4 定的规矩），跟左半边混在一起数就成了
+     * 「一半有灰有黑、一半全黑」，看着像功能坏了。
+     */
+    var leftEditor = document.querySelector('.paper .cm-editor') || document
+    var lines = Array.prototype.slice.call(leftEditor.querySelectorAll('.cm-line'))
     if (lines.length >= 3) {
       /*
        * ⚠️ 不能用「lines[1].click()」。
@@ -1371,8 +1430,22 @@ const OPEN_BOOK_SCRIPT = `(async () => {
        * 于是脚本量到的是「全亮」，看着像功能坏了，其实是没点进去。
        * 真人用鼠标点没这问题，所以这个坑只在自动化里踩得到。
        */
-      var cmc = document.querySelector('.cm-content')
-      if (cmc) cmc.focus()
+      var cmc = leftEditor.querySelector ? leftEditor.querySelector('.cm-content') : null
+      var isLit = function () { return leftEditor.className.indexOf('cm-focused') > -1 }
+      var stages = 'enter=' + isLit()
+      /*
+       * 反复要几次焦点。
+       *
+       * 开了双屏之后右半边是异步挂上来的，挂的那一刻左边有没有被打断
+       * 说不准 —— 而这一步要验的是专注模式，不是焦点的时序。
+       * 分阶段记下来，万一真是产品在丢焦点，这串字符能直接指出来。
+       */
+      for (var k = 0; k < 6; k++) {
+        if (cmc) cmc.focus()
+        await sleep(120)
+        if (isLit()) break
+      }
+      stages += ' afterFocus=' + isLit() + ' tries=' + k
       var rng = document.createRange()
       rng.setStart(lines[1].firstChild || lines[1], 0)
       rng.collapse(true)
@@ -1382,6 +1455,59 @@ const OPEN_BOOK_SCRIPT = `(async () => {
       await sleep(400)
       var dim = lines.map(function (el) { return el.className.indexOf('cm-dimmed') > -1 })
       focusBits = dim.map(function (d) { return d ? 'dim' : 'lit' }).join(',')
+      // 谁拿着焦点。全 lit 时这一句能直接说明是不是焦点被偷了
+      var allEds = Array.prototype.slice.call(document.querySelectorAll('.cm-editor'))
+      focusBits += ' | ' + stages + ' | inPaper=' + document.querySelectorAll('.paper .cm-editor').length
+        + ' inSide=' + document.querySelectorAll('.side-pane .cm-editor').length
+        + ' focusedIdx=' + allEds.map(function (e, i) {
+            return e.className.indexOf('cm-focused') > -1 ? i : -1
+          }).filter(function (i) { return i >= 0 }).join('/')
+        + ' lines=' + lines.length
+    }
+
+    /*
+     * 【双屏】两块编辑器都在，左边打字右边跟着变，**而右边一动不动**。
+     *
+     * 后半句是这一版最容易做砸、也最难自己发现的地方：
+     * 右边那半屏正是摆在那儿要对照看的，它一跳参照物就没了。
+     * 而「跳」有两条路（转发带滚动指令 / 对面打字机自己回中），
+     * 堵一条不够 —— 所以必须真量一次 scrollTop。
+     */
+    var splitBits = 'no-split'
+    var eds = Array.prototype.slice.call(document.querySelectorAll('.cm-editor'))
+    if (eds.length >= 2) {
+      var rightScroller = eds[1].querySelector('.cm-scroller')
+      var leftContent = eds[0].querySelector('.cm-content')
+      // 把右半边滚到中间去，模拟「我摆在这儿要看着它」
+      rightScroller.scrollTop = 200
+      await sleep(200)
+      var before = rightScroller.scrollTop
+      var rightTextBefore = (eds[1].querySelector('.cm-content').innerText || '').length
+      var leftTextBefore = (leftContent.innerText || '').length
+
+      // 在左边敲一个字
+      leftContent.focus()
+      var lsel = window.getSelection()
+      var lrng = document.createRange()
+      var firstLine = eds[0].querySelector('.cm-line')
+      lrng.setStart(firstLine.firstChild || firstLine, 0)
+      lrng.collapse(true)
+      lsel.removeAllRanges()
+      lsel.addRange(lrng)
+      document.execCommand('insertText', false, '囧')
+      await sleep(400)
+
+      var after = rightScroller.scrollTop
+      var rightTextAfter = (eds[1].querySelector('.cm-content').innerText || '').length
+      splitBits = JSON.stringify({
+        panes: eds.length,
+        moved: after - before,
+        grew: rightTextAfter - rightTextBefore,
+        // 左边也量一次：分得清「压根没敲进去」和「敲进去了但没转发过去」
+        leftGrew: (leftContent.innerText || '').length - leftTextBefore,
+        // 右半边到底被判成了哪一种。判成 own 的话根本不会接线
+        tag: (document.querySelector('.side-head') || {}).innerText || '',
+      })
     }
 
     var probe = document.createElement('style')
@@ -1395,11 +1521,12 @@ const OPEN_BOOK_SCRIPT = `(async () => {
       ok: true,
       bridgeHit: hit,
       focusBits: focusBits,
+      splitBits: splitBits,
       classed: bits.classed,
       detail: '正文 ' + cmText.length + ' 个字，' + JSON.stringify(bits),
     }
   } catch (e) {
-    return { ok: false, classed: 0, bridgeHit: false, focusBits: '', detail: '点开时抛了：' + String((e && e.message) || e) }
+    return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', detail: '点开时抛了：' + String((e && e.message) || e) }
   }
 })()`
 

@@ -88,6 +88,7 @@ describe('打字机模式：什么时候才把光标滚回中间', () => {
       selectionSet: false,
       ranged: false,
       byPointer: false,
+      focused: true,
       ...o,
     })
 
@@ -120,5 +121,31 @@ describe('打字机模式：什么时候才把光标滚回中间', () => {
 
   it('滚动、重绘之类的更新不触发', () => {
     expect(f({ docChanged: false, selectionSet: false, byPointer: true })).toBe(false)
+  })
+})
+
+describe('打字机模式：双屏里另一半一动不动', () => {
+  const f = (o: Partial<Parameters<typeof shouldRecenter>[0]>) =>
+    shouldRecenter({
+      docChanged: false,
+      selectionSet: false,
+      ranged: false,
+      byPointer: false,
+      focused: true,
+      ...o,
+    })
+
+  it('【关键】没焦点的那一半，文档变了也不动', () => {
+    // 双屏共享正文：左边打字，右边收到转发的改动。
+    // 不加这条的话右边会自己把光标滚回正中 —— 换条路，同样是跳
+    expect(f({ focused: false, docChanged: true, selectionSet: true })).toBe(false)
+  })
+
+  it('没焦点时，光标被改动映射着挪了位置也不动', () => {
+    expect(f({ focused: false, selectionSet: true })).toBe(false)
+  })
+
+  it('有焦点的那一半照常回中', () => {
+    expect(f({ focused: true, docChanged: true })).toBe(true)
   })
 })

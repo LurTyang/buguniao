@@ -38,14 +38,24 @@ import { replaceOn, type Rule } from './smart-replace.js'
  *     把那一行挪到屏幕中间去。人只是想把光标放那儿，没想让纸动。
  *
  * 打字机模式要的是「**写**的时候纸在走」，不是「碰一下就走」。
- * 所以判断按下面三条：
+ * 所以判断按下面四条：
  *
+ *   0. 这一半没有焦点 → **一律不动**。
  *   1. 选中了一片东西 → **一律不动**。这时候人在读、在挑，不是在写。
  *   2. 文档真的变了（打字、删字）→ 回中。这是它存在的理由。
  *   3. 只是光标动了 → 鼠标点的不动，键盘移的才动。
  *
  * 第 3 条那个分界是关键：键盘移光标是「我在往下写」的一部分，
  * 鼠标点是「我要去看看那儿」—— 后者本来就已经看得见了，不该再滚。
+ *
+ * 【第 0 条是双屏加的，它堵的是另一条「跳」的路】
+ *
+ * 双屏时两半共享同一份正文（见 pane-link.ts）。左边一打字，
+ * 右边收到转发过来的改动 —— 对它来说「文档变了」是真的，
+ * 于是第 2 条触发，右边自己把光标滚回正中。
+ *
+ * 转发那头已经把滚动指令剥干净了，但**这里不加这一条照样会跳**，
+ * 只是换了条路。作者要的是「右边一动不动」，那就得两条路都堵死。
  * ─────────────────────────────────────────────────────────────
  */
 export function shouldRecenter(o: {
@@ -55,7 +65,10 @@ export function shouldRecenter(o: {
   ranged: boolean
   /** 这次更新里有「鼠标在选」这种操作 */
   byPointer: boolean
+  /** 这一半有没有焦点。双屏时另一半必须一动不动 */
+  focused: boolean
 }): boolean {
+  if (!o.focused) return false
   if (o.ranged) return false
   if (o.docChanged) return true
   if (!o.selectionSet) return false
@@ -68,12 +81,14 @@ function recenterFacts(u: ViewUpdate): {
   selectionSet: boolean
   ranged: boolean
   byPointer: boolean
+  focused: boolean
 } {
   return {
     docChanged: u.docChanged,
     selectionSet: u.selectionSet,
     ranged: !u.state.selection.main.empty,
     byPointer: u.transactions.some((tr) => tr.isUserEvent('select.pointer')),
+    focused: u.view.hasFocus,
   }
 }
 

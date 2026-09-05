@@ -29,6 +29,7 @@ import { syntaxHighlighting, HighlightStyle } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 import { searchKeymap } from '@codemirror/search'
 import { isStickyDrag } from '../sticky-drag.js'
+import { type DocLink } from '../pane-link.js'
 import { FENCE_RE, lineKindOf } from '../md-line-class.js'
 import { focusMode, smartReplace, typewriterHorizontal, typewriterVertical } from '../editor-writing.js'
 import type { Rule as SmartRule } from '../smart-replace.js'
@@ -342,11 +343,32 @@ export interface EditorProps {
    * 光看 before/after 变没变会漏掉第二次。
    */
   insertRequest?: { before: string; after: string; nonce: number } | null
+  /**
+   * 双屏里共享同一份正文的那根线。
+   *
+   * 只有「两边打开同一篇」时才给 —— 别的摆法两边是两份不同的文档，
+   * 各写各的，不需要这根线。
+   *
+   * 给了之后：这一半的改动会转发给另一半，**但只转内容，不转视线**
+   * （见 pane-link.ts）。
+   */
+  link?: DocLink | null
+  /**
+   * 建好之后要不要立刻抢焦点。默认要 —— 点开一章就该能直接打字。
+   *
+   * ⚠️ **双屏的右半边必须给 false。** 它比左边晚建好，
+   * 建好时一 `focus()` 就把焦点从左边抢走了 —— 作者正在左边写字，
+   * 光标忽然没了。而且专注模式会因此把左边整片点亮（它认「没焦点就不淡」），
+   * 看起来像专注模式坏了，其实是焦点被偷了。
+   */
+  autoFocus?: boolean
 }
 
 export function Editor({
   docPath,
   initialBody,
+  link,
+  autoFocus = true,
   onChange,
   onSaveRequest,
   onWikiLink,
@@ -364,6 +386,17 @@ export function Editor({
   const hostRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   // 建编辑器时要读当前值，但不能让它进依赖数组（那会重建编辑器）
+  /*
+   * 双屏那根线。放 ref 里是为了换线时不用重建整个编辑器 ——
+   * 重建会清空撤销历史，而「把右边换成同一篇」这个动作不该有这种代价。
+   */
+  const linkRef = useRef(link)
+  linkRef.current = link
+
+  // 建视图那个 effect 只认 docPath，所以这个值得走 ref
+  const autoFocusRef = useRef(autoFocus)
+  autoFocusRef.current = autoFocus
+
   const scriptRef = useRef(script)
   scriptRef.current = script
   const castRef = useRef(cast)
@@ -425,6 +458,17 @@ export function Editor({
         ...searchKeymap,
         indentWithTab,
       ]),
+      /*
+       * 双屏：把这一半的改动转给另一半。
+       *
+       * 摆在别的监听器**前面**，让两边的正文先对齐，再去做数字数、
+       * 报光标那些事 —— 顺序反了的话，中间那一瞬两边内容是不一致的。
+       */
+      EditorView.updateListener.of((u) => {
+        const l = linkRef.current
+        if (!l) return
+        for (const tr of u.transactions) l.relay(u.view, tr, tr.changes)
+      }),
       EditorView.updateListener.of((u) => {
         if (u.docChanged) cbRef.current.onChange(u.state.doc.toString())
         if (u.docChanged && cbRef.current.onEdit) {
@@ -517,7 +561,7 @@ export function Editor({
       parent: hostRef.current,
     })
     viewRef.current = view
-    view.focus()
+    if (autoFocusRef.current) view.focus()
     reportCaret(view)
 
     return () => {
@@ -527,6 +571,21 @@ export function Editor({
     // 只在切换文档时重建。initialBody 变化不重建 —— 那是我们自己写回去的内容
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docPath])
+
+  /*
+   * 把这个视图挂到那根线上。
+   *
+   * 单独一个 effect，而且**必须排在建视图那个后面** —— React 按声明顺序
+   * 跑 effect，排前面的话 viewRef 还是空的，挂了个寂寞。
+   *
+   * 返回的是「摘下来」。视图销毁或者换线时一定要摘，
+   * 否则会往一个已经 destroy 的视图上派发事务，当场抛。
+   */
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view || !link) return
+    return link.attach(view)
+  }, [link, docPath])
 
   /**
    * 外部（主进程）改了正文时把内容换掉。

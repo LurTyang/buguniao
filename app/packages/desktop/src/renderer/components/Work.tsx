@@ -36,6 +36,9 @@ import { TransferOverlay } from './TransferOverlay.js'
 import { ConflictOverlay } from './ConflictOverlay.js'
 import { VersionClash } from './VersionClash.js'
 import { QuickJump } from './QuickJump.js'
+import { SidePane } from './SidePane.js'
+import { DocLink } from '../pane-link.js'
+import { DEFAULT_RATIO, clampRatio, needsLink, paneMode, ratioFromDrag } from '../split.js'
 import { LinksPanel } from './LinksPanel.js'
 import { TrashPanel } from './TrashPanel.js'
 import { ScriptPanel } from './ScriptPanel.js'
@@ -224,6 +227,55 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
   const dirBar = useSidebar(settings.dirBarPinned, (p) => onSettingsChange({ dirBarPinned: p }))
   const toolBar = useSidebar(settings.toolBarPinned, (p) => onSettingsChange({ toolBarPinned: p }))
   const ctx = useContextMenu()
+
+  /* ── 双屏 ───────────────────────────────────────────────
+   *
+   * 规矩全在 renderer/split.ts，这儿只负责接线。
+   * 尤其是「右边该不该自己存盘」那一条 —— 判错了是静默丢稿，
+   * 所以不在这里写 if，一律问 split.ts。
+   */
+  const workBodyRef = useRef<HTMLDivElement | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const [pickingRight, setPickingRight] = useState(false)
+  const ratio = clampRatio(settings.splitRatio ?? DEFAULT_RATIO)
+  const splitMode = paneMode(!!settings.splitOn, docPath, settings.splitRight ?? null)
+
+  /*
+   * 两边共享正文的那根线。
+   *
+   * **按「哪一篇」记住**：换了文档就得是新的一根，否则旧线还连着
+   * 已经销毁的视图。用 useMemo 而不是 useRef，是因为它要跟着
+   * docPath 变 —— 而 needsLink 为假时给 null，省掉一整套无用的转发。
+   */
+  const docLink = useMemo(
+    () => (needsLink(splitMode) ? new DocLink() : null),
+    [splitMode, docPath],
+  )
+
+  // 拖分隔线。松手才写配置 —— 拖的过程中每移动一像素写一次盘太蠢
+  useEffect(() => {
+    if (!dragging) return
+    const move = (e: MouseEvent) => {
+      const box = workBodyRef.current?.getBoundingClientRect()
+      if (!box) return
+      workBodyRef.current?.style.setProperty(
+        '--split-ratio',
+        String(ratioFromDrag(e.clientX - box.left, box.width)),
+      )
+    }
+    const up = () => {
+      setDragging(false)
+      const cur = workBodyRef.current?.style.getPropertyValue('--split-ratio')
+      const n = Number(cur)
+      if (Number.isFinite(n) && n > 0) onSettingsChange({ splitRatio: clampRatio(n) })
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+    return () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+    }
+  }, [dragging, onSettingsChange])
 
   const bodyRef = useRef(body)
   bodyRef.current = body
@@ -782,6 +834,24 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
 
   const counts = useMemo(() => countWords(body), [body])
   const chapters = useMemo(() => (tree ? flattenChapters(tree.text) : []), [tree])
+
+  /**
+   * 右半边标题栏上写什么。
+   *
+   * 书里的文档去目录里查它的名字；外部参考文档只能拿文件名 ——
+   * 但**总要有个名字**：一个只写着路径的标题栏，扫一眼认不出是哪一篇。
+   */
+  const rightTitle = useMemo(() => {
+    const r = settings.splitRight
+    if (!r?.path) return ''
+    const base = (p: string): string => p.split(/[\/]/).pop() ?? p
+    if (r.kind === 'file') return base(r.path)
+    const hit = chapters.find((c) => c.path === r.path)
+    if (hit) return hit.title
+    const inOutline = tree?.outline.find((n) => n.path === r.path)
+    return inOutline?.title ?? base(r.path).replace(/\.md$/i, '')
+  }, [settings.splitRight, chapters, tree])
+
   const volumes = useMemo(
     () => (tree ? tree.text.filter((n) => n.kind === 'volume') : []),
     [tree],
@@ -1260,6 +1330,28 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
             </>
           )}
         </div>
+        {/*
+          双屏开关。摆在面包屑旁边 —— 它改的是「这块屏怎么摆」，
+          跟当前在哪一章是同一层的事；塞进功能栏的话，
+          每次想对照看一眼都要先展开侧边栏。
+        */}
+        {docPath && (
+          <button
+            className={`icon-btn${splitMode === 'off' ? '' : ' on'}`}
+            onClick={() => {
+              if (splitMode !== 'off') {
+                onSettingsChange({ splitOn: false })
+                return
+              }
+              // 没选过就直接弹挑选框 —— 开一个空的右半边没有任何意义
+              if (settings.splitRight?.path) onSettingsChange({ splitOn: true })
+              else setPickingRight(true)
+            }}
+            title={splitMode === 'off' ? '开双屏对照' : '关掉双屏'}
+          >
+            双屏
+          </button>
+        )}
         <div className="topbar-right">
           {/*
             这一坐的产出。**三个数都摆出来**：改稿那天净值常常是负的，
@@ -1363,7 +1455,12 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
         </div>
       )}
 
-      <div className="work-body" onMouseMove={onWorkMouseMove}>
+      <div
+        className={`work-body${splitMode === 'off' ? '' : ' split'}`}
+        ref={workBodyRef}
+        style={splitMode === 'off' ? undefined : ({ ['--split-ratio' as string]: String(ratio) } as React.CSSProperties)}
+        onMouseMove={onWorkMouseMove}
+      >
         {swapped ? directoryPanel : toolPanel}
 
         <div
@@ -1410,6 +1507,9 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
               script={scriptView}
               writing={writing}
               cast={cast.cast}
+              // 双屏共享正文时，**两头都要接上这根线** ——
+              // 只接一头的话 relay 找不到对端，转发静默失效
+              link={docLink}
               insertRequest={insertReq}
               onContextMenu={openEditorMenu}
             />
@@ -1421,6 +1521,36 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
             </div>
           )}
         </div>
+
+        {splitMode !== 'off' && (
+          <>
+            {/*
+              分隔线。按住拖 —— 松开才写进配置，拖的过程中只动 CSS，
+              不然每移动一像素就写一次盘
+            */}
+            <div
+              className="split-grip"
+              onMouseDown={(e) => {
+                e.preventDefault()
+                setDragging(true)
+              }}
+              title="拖动改变左右宽度"
+            />
+            <SidePane
+              mode={splitMode}
+              right={settings.splitRight}
+              sharedBody={body}
+              link={docLink}
+              writing={writing}
+              script={scriptView}
+              cast={cast.cast}
+              onWikiLink={(target) => void openWikiLink(target)}
+              onPickDoc={() => setPickingRight(true)}
+              onClose={() => onSettingsChange({ splitOn: false })}
+              title={rightTitle}
+            />
+          </>
+        )}
 
         {swapped ? toolPanel : directoryPanel}
       </div>
@@ -1450,6 +1580,23 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
 
       {quickJump && tree && (
         <QuickJump tree={tree} onPick={(p) => void openDoc(p)} onClose={() => setQuickJump(false)} />
+      )}
+
+      {/*
+        挑右边摆哪一篇。复用快速跳转那个框 —— 它已经能搜正文、大纲、设定集，
+        另做一个「选文档」对话框只会多一处要维护的东西。
+        **允许挑跟左边同一篇** —— 那正是「同一章开头结尾对着改」那个场景，
+        split.ts 会把它判成 shared，右边于是共享正文、不自己存盘。
+      */}
+      {pickingRight && tree && (
+        <QuickJump
+          tree={tree}
+          onPick={(p) => {
+            onSettingsChange({ splitOn: true, splitRight: { kind: 'doc', path: p } })
+            setPickingRight(false)
+          }}
+          onClose={() => setPickingRight(false)}
+        />
       )}
 
       {showConflicts && (

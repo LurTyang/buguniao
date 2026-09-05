@@ -11,6 +11,7 @@ import * as path from 'node:path'
 import { app } from 'electron'
 import { migrateConfig } from './config-migrate.js'
 import type { ThemeDraft } from '../shared/theme-draft.js'
+import type { RightSide } from '../shared/split-types.js'
 import { EMPTY_SLOT as _EMPTY, type ThemeSlot } from '../shared/theme-slots.js'
 import type { Award } from '@bugu/core'
 
@@ -144,6 +145,18 @@ export interface UserConfig {
   typewriterH: boolean
   /** 专注模式：当前段落之外的字变淡 */
   focusMode: boolean
+  /**
+   * 双屏：开着没有、右边摆什么、分隔线在哪儿。
+   *
+   * `splitRight` 存的是**书里的相对路径**（kind='doc'）或者
+   * **硬盘上的绝对路径**（kind='file'）。换了一本书之后相对路径多半失效 ——
+   * 那时候右边显示成空的，而不是报错：作者要的是「换本书接着写」，
+   * 不是「先来处理一个错误」。
+   */
+  splitOn: boolean
+  splitRight: RightSide | null
+  /** 左边占的比例，0.2–0.8。见 renderer/split.ts */
+  splitRatio: number
   /** 稿纸上下留白（像素）。0 = 老样子，顶着边 */
   pagePadY: number
   /**
@@ -213,6 +226,9 @@ const DEFAULTS: Omit<UserConfig, 'deviceId'> = {
   typewriterV: false,
   typewriterH: false,
   focusMode: false,
+  splitOn: false,
+  splitRight: null,
+  splitRatio: 0.5,
   pagePadY: 0,
   paraIndent: 2,
   // 智能替换默认开着：中文标点是每天几百次的摩擦，

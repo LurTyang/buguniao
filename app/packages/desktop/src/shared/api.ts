@@ -65,6 +65,7 @@ import type {
 } from '@bugu/core'
 import type { ThemeDraft } from './theme-draft.js'
 import type { ThemeSlot } from './theme-slots.js'
+import type { RightSide } from './split-types.js'
 
 /**
  * 「我在对外统计服务上是什么样」。**这里没有令牌** —— 令牌只在主进程里。
@@ -233,6 +234,18 @@ export interface UserSettings {
   typewriterH: boolean
   /** 专注模式：当前段落之外变淡 */
   focusMode: boolean
+  /**
+   * 双屏：开着没有、右边摆什么、分隔线在哪儿。
+   *
+   * `splitRight` 存的是**书里的相对路径**（kind='doc'）或者
+   * **硬盘上的绝对路径**（kind='file'）。换了一本书之后相对路径多半失效 ——
+   * 那时候右边显示成空的，而不是报错：作者要的是「换本书接着写」，
+   * 不是「先来处理一个错误」。
+   */
+  splitOn: boolean
+  splitRight: RightSide | null
+  /** 左边占的比例，0.2–0.8。见 renderer/split.ts */
+  splitRatio: number
   /** 稿纸上下留白（像素） */
   pagePadY: number
   /** 首行缩进几个字。0 = 不缩进。是 CSS 缩进，文件里不存空格 */
