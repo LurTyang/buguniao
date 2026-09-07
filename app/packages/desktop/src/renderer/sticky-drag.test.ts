@@ -12,6 +12,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   STICKY_DRAG_TYPE,
+  dropKind,
   isStickyDrag,
   startStickyDrag,
   stickyCardOf,
@@ -93,5 +94,31 @@ describe('接住的时候认不认得出来', () => {
   it('没有 dataTransfer 时当成「不是」', () => {
     expect(isStickyDrag({ dataTransfer: null })).toBe(false)
     expect(stickyCardOf({ dataTransfer: null })).toBe('')
+  })
+})
+
+describe('拖过来的到底是什么（右半边同时接文件和便利贴）', () => {
+  it('便利贴', () => {
+    const e = fakeDrag()
+    startStickyDrag(e, '设定/人物/李四.md')
+    expect(dropKind(e)).toBe('sticky')
+  })
+
+  it('文件', () => {
+    expect(dropKind(fakeDrag({ Files: '' }))).toBe('file')
+  })
+
+  it('⚠️ 两个都在的时候算便利贴 —— 它绝不能被当成文件去读盘', () => {
+    // 当成文件的话，作者拖一张人物卡到右边，
+    // 得到的是一句「这个文件打不开」——而他拖的根本不是文件
+    const e = fakeDrag({ Files: '' })
+    startStickyDrag(e, '设定/人物/李四.md')
+    expect(dropKind(e)).toBe('sticky')
+  })
+
+  it('拖一段网页文字过来，两边都不接', () => {
+    // 尤其不能接 text/plain —— 那正是 0.3 那个 bug 的入口
+    expect(dropKind(fakeDrag({ 'text/plain': '一段字' }))).toBe('none')
+    expect(dropKind(fakeDrag())).toBe('none')
   })
 })

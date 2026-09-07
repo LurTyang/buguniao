@@ -57,3 +57,34 @@ export function isStickyDrag(e: DragLike): boolean {
 export function stickyCardOf(e: DragLike): string {
   return isStickyDrag(e) ? (e.dataTransfer?.getData(STICKY_DRAG_TYPE) ?? '') : ''
 }
+
+/** 一次拖放该交给谁处理 */
+export type DropKind =
+  /** 一张便利贴，贴在落点上 */
+  | 'sticky'
+  /** 硬盘上的一个文件，当参考摆进右半边 */
+  | 'file'
+  /** 别的一概不管 */
+  | 'none'
+
+/**
+ * 这一次拖的是什么。
+ *
+ * ─────────────────────────────────────────────────────────────
+ * 双屏之后**右半边也接便利贴**了（作者定的：贴在鼠标拖到的地方），
+ * 于是那一半同时是「文件投放区」和「便利贴投放区」，
+ * 得先分清拖过来的是哪一种。
+ *
+ * 抽成函数跟 `STICKY_DRAG_TYPE` 是同一个理由：这个判断现在有两处要用，
+ * 而两处不一致的表现是**「拖到右边没反应」**—— 不报错，
+ * 作者只会以为软件坏了，或者以为右半边不让拖。
+ *
+ * ⚠️ **便利贴要排在文件前面判。** 顺序反了的话，
+ * 某些平台上一次便利贴拖放里若混进了 `Files`，它就会被当成文件去读盘，
+ * 然后报一句「这个文件打不开」—— 而作者拖的根本不是文件。
+ * ─────────────────────────────────────────────────────────────
+ */
+export function dropKind(e: DragLike): DropKind {
+  if (isStickyDrag(e)) return 'sticky'
+  return e.dataTransfer?.types.includes('Files') ? 'file' : 'none'
+}

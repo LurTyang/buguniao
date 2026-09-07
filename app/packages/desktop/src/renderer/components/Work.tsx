@@ -38,7 +38,16 @@ import { VersionClash } from './VersionClash.js'
 import { QuickJump } from './QuickJump.js'
 import { SidePane } from './SidePane.js'
 import { DocLink } from '../pane-link.js'
-import { DEFAULT_RATIO, baseName, clampRatio, needsLink, paneMode, ratioFromDrag } from '../split.js'
+import {
+  DEFAULT_RATIO,
+  baseName,
+  clampRatio,
+  needsLink,
+  paneMode,
+  ratioFromDrag,
+  rightCounts,
+  totalCounts,
+} from '../split.js'
 import { LinksPanel } from './LinksPanel.js'
 import { TrashPanel } from './TrashPanel.js'
 import { ScriptPanel } from './ScriptPanel.js'
@@ -828,11 +837,62 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
     ],
   )
 
-  /** 这一坐写了多少、删了多少。从软件打开算起，点顶栏那个数清零 */
+  /**
+   * 这一坐写了多少、删了多少。从软件打开算起，点顶栏那个数清零。
+   *
+   * **两边合计**：右半边敲的字也进这个数（SidePane 的 `onEdit` 喂进来）。
+   * 共享模式下不会重复计 —— 转发给对面那笔事务不带 userEvent，
+   * 而 Editor 只数带 userEvent 的。谁敲的算谁头上。
+   */
   const [session, setSession] = useState(EMPTY_SESSION)
   const sessionText = useMemo(() => describeSession(session), [session])
 
-  const counts = useMemo(() => countWords(body), [body])
+  /** 右半边此刻的正文。只为了数字数 —— 它的读写都在 SidePane 自己那儿 */
+  const [rightBody, setRightBody] = useState('')
+
+  /**
+   * 把一张便利贴贴到落点上。
+   *
+   * ─────────────────────────────────────────────────────────────
+   * 作者定的：**便利贴自然贴在鼠标拖到的地方。**
+   *
+   * 所以左右两半用的是**同一个**处理函数，而不是各写一遍 ——
+   * 各写一遍的话，两边迟早会在某个细节上不一样（少一次去重、
+   * 少一次出屏夹取），而那种不一样只会以「拖到右边就贴歪了」的形式出现。
+   *
+   * 便利贴本来就浮在整个窗口上（`position: fixed`，坐标是屏幕坐标），
+   * 它不属于哪一半 —— 所以「贴在落点」这件事在右半边不需要任何换算。
+   * ─────────────────────────────────────────────────────────────
+   */
+  const dropSticky = useCallback(
+    (cardPath: string, clientX: number, clientY: number) => {
+      const card = [...stickies.values()].find((c) => c.path === cardPath)
+      if (!card) return
+      // 已经贴过的就挪到落点，不重复贴一张
+      const rest = pinned.filter((p) => p.cardId !== card.docId)
+      persistPinned([...rest, placeNewSticky(card.docId, clientX, clientY)])
+    },
+    [stickies, pinned, persistPinned],
+  )
+
+  const leftCounts = useMemo(() => countWords(body), [body])
+  const rightSideCounts = useMemo(
+    () => (rightCounts(splitMode) ? countWords(rightBody) : null),
+    [rightBody, splitMode],
+  )
+  /**
+   * 顶栏那个字数：**两边合计**（作者定的）。
+   *
+   * 备选是「以有焦点的那一半为准」，那条的毛病当场就看得见 ——
+   * 数字跟着点哪儿变，同一份活两个数交替闪。合计是个稳定的数。
+   *
+   * `totalCounts` 里管着那条例外：同一份文档的两个视图只算一遍。
+   */
+  const counts = useMemo(
+    () => totalCounts(leftCounts, rightSideCounts, splitMode),
+    [leftCounts, rightSideCounts, splitMode],
+  )
+  const countsSplit = rightSideCounts !== null
   const chapters = useMemo(() => (tree ? flattenChapters(tree.text) : []), [tree])
 
   /**
@@ -1140,6 +1200,7 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
             bookPath={book.rootPath}
             today={today}
             counts={counts}
+            countsSplit={countsSplit}
             bookTitle={book.meta.title}
             refreshKey={savedTick}
             onOpenFull={() => setShowStats(true)}
@@ -1389,7 +1450,15 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
               {pomo.phase === 'focus' ? '专注' : '休息'} {fmtClock(pomo.remaining)}
             </span>
           )}
-          <span title="本章字数（含标点）">{formatCount(counts.withPunctuation)} 字</span>
+          <span
+            title={
+              rightSideCounts
+                ? `两边合计（含标点）：左 ${formatCount(leftCounts.withPunctuation)} + 右 ${formatCount(rightSideCounts.withPunctuation)}`
+                : '本章字数（含标点）'
+            }
+          >
+            {formatCount(counts.withPunctuation)} 字
+          </span>
           <span
             className={`save-dot ${saveState === 'dirty' ? 'dirty' : saveState === 'saved' ? 'saved' : ''}`}
             title={SAVE_HINT[saveState]}
@@ -1475,11 +1544,7 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
             const cardPath = stickyCardOf(e)
             if (!cardPath) return
             e.preventDefault()
-            const card = [...stickies.values()].find((c) => c.path === cardPath)
-            if (!card) return
-            // 已经贴过的就挪到落点，不重复贴一张
-            const rest = pinned.filter((p) => p.cardId !== card.docId)
-            persistPinned([...rest, placeNewSticky(card.docId, e.clientX, e.clientY)])
+            dropSticky(cardPath, e.clientX, e.clientY)
           }}
         >
           {docPath ? (
@@ -1546,6 +1611,12 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
               script={scriptView}
               cast={cast.cast}
               onWikiLink={(target) => void openWikiLink(target)}
+              onBodyChange={setRightBody}
+              // 右边敲的字也算进「这一坐的产出」—— 两边合计
+              onEdit={(a, r) => setSession((c) => addEdit(c, a, r))}
+              // 贴在右半边的便利贴也要给光标让路，所以右边的光标位置也得报上来
+              onCaretMove={setCaret}
+              onStickyDrop={dropSticky}
               onPickDoc={() => setPickingRight(true)}
               onClose={() => onSettingsChange({ splitOn: false })}
               title={rightTitle}
@@ -1878,6 +1949,7 @@ function StatsPanel({
   bookPath,
   today,
   counts,
+  countsSplit,
   bookTitle,
   refreshKey,
   onOpenFull,
@@ -1885,6 +1957,8 @@ function StatsPanel({
   bookPath: string
   today: TodayProgress | null
   counts: { withPunctuation: number; withoutPunctuation: number }
+  /** 这两个数是不是左右合计的。是的话标题不能再写「本章」 */
+  countsSplit: boolean
   bookTitle: string
   refreshKey: number
   onOpenFull(): void
@@ -1939,12 +2013,17 @@ function StatsPanel({
             )}
           </b>
         </div>
+        {/*
+          开着双屏时这两个数是**两边合计**的，那就不能再叫「本章」——
+          一个写着「本章」的数其实含着右半边那一篇，作者会拿它当本章字数用，
+          然后发现怎么导出来的少了一截。
+        */}
         <div className="stat-row">
-          <span>本章 · 含标点</span>
+          <span>{countsSplit ? '两边 · 含标点' : '本章 · 含标点'}</span>
           <b>{formatCount(counts.withPunctuation)}</b>
         </div>
         <div className="stat-row">
-          <span>本章 · 不含标点</span>
+          <span>{countsSplit ? '两边 · 不含标点' : '本章 · 不含标点'}</span>
           <b>{formatCount(counts.withoutPunctuation)}</b>
         </div>
       </div>

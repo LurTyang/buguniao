@@ -17,9 +17,13 @@ import {
   paneMode,
   ratioFromDrag,
   rightFollowsLeft,
+  rightCounts,
   rightPersistsScratch,
   rightSaves,
   safeToSave,
+  totalCounts,
+  ZERO_COUNTS,
+  type Counts,
   type RightSide,
 } from './split.js'
 
@@ -197,5 +201,41 @@ describe('从路径里抠文件名', () => {
 describe('左边换文档时右边不跟', () => {
   it('永远不跟 —— 摆在右边就是要一直看着它', () => {
     expect(rightFollowsLeft()).toBe(false)
+  })
+})
+
+describe('字数：两边合计', () => {
+  const c = (w: number, n: number): Counts => ({ withPunctuation: w, withoutPunctuation: n })
+
+  it('没开双屏时右边不算 —— 根本没有右边', () => {
+    expect(rightCounts('off')).toBe(false)
+    expect(rightCounts('empty')).toBe(false)
+  })
+
+  it('右边是另一篇、是便笺、是书外参考，都算', () => {
+    expect(rightCounts('own')).toBe(true)
+    expect(rightCounts('scratch')).toBe(true)
+    expect(rightCounts('ref')).toBe(true)
+  })
+
+  it('⚠️ 同一份文档的两个视图只能算一遍', () => {
+    // 一章三千字，两边一加就是六千 —— 那不是合计，是把同一份稿子数了两遍。
+    // 而且它偏偏在最有用的那种摆法（对着开头改结尾）上出错
+    expect(rightCounts('shared')).toBe(false)
+    expect(totalCounts(c(3000, 2600), c(3000, 2600), 'shared')).toEqual(c(3000, 2600))
+  })
+
+  it('两边都有字就加起来', () => {
+    expect(totalCounts(c(3200, 2800), c(800, 700), 'own')).toEqual(c(4000, 3500))
+  })
+
+  it('右边还没读到（null）就只报左边，不报 0', () => {
+    // 读盘是异步的。这一小段时间里把右边当成 0 加进去，
+    // 数字会先跳一下再跳回来 —— 看着像字丢了
+    expect(totalCounts(c(3200, 2800), null, 'own')).toEqual(c(3200, 2800))
+  })
+
+  it('空的右半边加了等于没加', () => {
+    expect(totalCounts(c(3200, 2800), ZERO_COUNTS, 'own')).toEqual(c(3200, 2800))
   })
 })

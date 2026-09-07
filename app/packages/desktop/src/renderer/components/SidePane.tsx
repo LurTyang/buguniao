@@ -29,6 +29,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Editor, type EditorProps } from './Editor.js'
 import { Boom } from './Boom.js'
 import type { DocLink } from '../pane-link.js'
+import { dropKind, stickyCardOf } from '../sticky-drag.js'
 import type { PaneMode, RightSide } from '../split.js'
 import { rightPersistsScratch, rightSaves, safeToSave } from '../split.js'
 
@@ -50,6 +51,30 @@ export interface SidePaneProps {
   cast: EditorProps['cast']
   /** 右边点了双链 */
   onWikiLink?(target: string): void
+  /**
+   * 右边这半的正文变了。**顶栏那个字数是两边合计的**，所以左边得知道右边有多少字。
+   *
+   * 换文档的途中先报一个空串 —— 那会儿手里还是上一篇的正文，
+   * 拿它去凑合计等于报一个假数。
+   */
+  onBodyChange(text: string): void
+  /**
+   * 右边敲了多少、删了多少，算进「这一坐的产出」里。
+   *
+   * ⚠️ 共享模式下**不会重复计数**：转发过去的那笔事务不带 userEvent，
+   * 而 Editor 数字数时只数带 userEvent 的（见 Editor.tsx）。
+   * 谁敲的算谁头上，转发过去的那份不算第二遍。
+   */
+  onEdit(added: number, removed: number): void
+  /** 右边的光标在屏幕哪儿 —— 便利贴靠它让路 */
+  onCaretMove(pos: { x: number; y: number } | null): void
+  /**
+   * 往右半边拖了一张便利贴。
+   *
+   * 便利贴贴在**鼠标放开的地方**，左右两边一视同仁 ——
+   * 它浮在整个窗口上（`position: fixed`），本来就不属于哪一半。
+   */
+  onStickyDrop(cardPath: string, clientX: number, clientY: number): void
   /** 换一份 / 关掉 */
   onPickDoc(): void
   onClose(): void
@@ -170,6 +195,19 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, path])
 
+  /*
+   * 把这一半有多少字**报出去**。顶栏那个数是两边合计的。
+   *
+   * `ready` 之前一律报空串 —— 那会儿 `body` 装的还是上一篇的正文，
+   * 拿它去凑合计就是个假数，而且它会在读完的那一瞬跳一下。
+   * 宁可少算，不可乱算。
+   */
+  useEffect(() => {
+    props.onBodyChange(ready ? body : '')
+    // props 每次渲染都是新的，进依赖会每帧重报一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [body, ready])
+
   const flush = useCallback(async () => {
     if (!safeToSave(mode, loadedFor.current, path)) return
     window.clearTimeout(timer.current)
@@ -197,6 +235,8 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
   const onChange = useCallback(
     (next: string) => {
       bodyRef.current = next
+      // 敲字不走 `body` 那个 state（那是只在换文档时才动的），所以这儿单独报一次
+      props.onBodyChange(next)
       if (isScratch) {
         // 便笺存进配置，节流一下 —— 每敲一个字写一次盘太蠢
         window.clearTimeout(timer.current)
@@ -233,6 +273,16 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
        * 于是「拿不到路径」这条最常见的路正好是最惨的那条。
        */
       e.preventDefault()
+      /*
+       * 拖进来的可能是一张便利贴 —— 它不是文件，别拿去当参考文档读。
+       *
+       * 贴哪儿由**鼠标放开的位置**说了算，右半边跟左半边一视同仁：
+       * 便利贴浮在整个窗口上，本来就不属于哪一半。
+       */
+      if (dropKind(e) === 'sticky') {
+        props.onStickyDrop(stickyCardOf(e), e.clientX, e.clientY)
+        return
+      }
       const f = e.dataTransfer.files[0]
       if (!f) return
       const p = api.pathForFile(f)
@@ -251,8 +301,10 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
     <div
       className="side-pane"
       onDragOver={(e) => {
-        // 只在拖的是文件时接管。拖便利贴那种有它自己的一套
-        if (e.dataTransfer.types.includes('Files')) {
+        // 文件（当参考摆进来）和便利贴（贴在落点上）都接。
+        // 别的一概不接 —— 尤其别接 text/plain，那会让 CodeMirror
+        // 把拖过来的字当正文插进去（0.3 踩过这一枪，见 sticky-drag.ts）
+        if (dropKind(e) !== 'none') {
           e.preventDefault()
           e.dataTransfer.dropEffect = 'copy'
         }
@@ -334,6 +386,8 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
               primary={false}
               readOnly={mode === 'ref'}
               onChange={onChange}
+              onEdit={props.onEdit}
+              onCaretMove={props.onCaretMove}
               onSaveRequest={() => void flush()}
               writing={props.writing}
               script={props.script}

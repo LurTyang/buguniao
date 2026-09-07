@@ -572,10 +572,24 @@ export function Editor({
       }),
     ]
 
-    /** 把光标的屏幕坐标报出去，便利贴用它决定要不要让路 */
+    /**
+     * 把光标的屏幕坐标报出去，便利贴用它决定要不要让路。
+     *
+     * ⚠️ **没焦点的那一半一个字都不报。**
+     *
+     * 双屏之后两块稿纸都在报同一个「光标在哪儿」。不加这道闸的话，
+     * 右半边一次滚动、一次重排就把左边正在写的那个位置**覆盖掉** ——
+     * 结果是作者在左边写字，让路的却是右边那张便利贴，
+     * 而压在他手底下的那张纹丝不动。
+     *
+     * 「不报」不是「报 null」：报 null 等于说「现在没有光标」，
+     * 那会把有焦点那一半刚报上来的位置抹掉，同样是一次覆盖。
+     * 让路要跟着**正在写的那一半**走，所以没焦点就干脆别出声。
+     */
     function reportCaret(view: EditorView) {
       const cb = cbRef.current.onCaretMove
       if (!cb) return
+      if (!view.hasFocus) return
       try {
         const c = view.coordsAtPos(view.state.selection.main.head)
         cb(c ? { x: (c.left + c.right) / 2, y: (c.top + c.bottom) / 2 } : null)

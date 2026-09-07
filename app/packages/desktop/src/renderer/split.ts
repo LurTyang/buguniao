@@ -173,3 +173,50 @@ export function rightFollowsLeft(): boolean {
   // 有个测试、有个能讲道理的地方 —— 而不是散在组件里的一个 if
   return false
 }
+
+/**
+ * 右半边的字数**算不算进**顶栏那个数。
+ *
+ * ─────────────────────────────────────────────────────────────
+ * 作者定的：**两边合计。**
+ *
+ * 原来的备选是「以有焦点的那一半为准」，那条有个当场就能看见的毛病：
+ * 数字会跟着点哪儿变。左边点一下 3,200，右边点一下 1,400 ——
+ * 同一份活，两个数交替闪，作者没法拿它判断任何事情。
+ * 合计是个**稳定**的数：它只在真敲了字的时候变。
+ *
+ * ⚠️ **只有 `shared` 是例外，而且必须是例外。**
+ * 那时候左右是**同一份文档的两个视图** —— 一章三千字，
+ * 两边一加就成了六千。那不是「合计」，那是把同一份稿子数了两遍，
+ * 而且它偏偏在最有用的那种摆法（对着开头改结尾）上出错。
+ *
+ * 便笺和书外的参考**算**。它们确实是「摆在右边的另一堆字」，
+ * 而作者要的就是两边合计；数字旁边写清楚哪一半贡献了多少，
+ * 他一眼能看出这 800 字是参考资料还是他自己写的。
+ * ─────────────────────────────────────────────────────────────
+ */
+export function rightCounts(mode: PaneMode): boolean {
+  return mode === 'own' || mode === 'scratch' || mode === 'ref'
+}
+
+/** 一份正文的两个字数。跟 core/wordcount 出来的形状一致 */
+export interface Counts {
+  withPunctuation: number
+  withoutPunctuation: number
+}
+
+export const ZERO_COUNTS: Counts = { withPunctuation: 0, withoutPunctuation: 0 }
+
+/**
+ * 两边合计。
+ *
+ * @param left  左边这一半的字数
+ * @param right 右边那一半的字数。还没读到就传 null
+ */
+export function totalCounts(left: Counts, right: Counts | null, mode: PaneMode): Counts {
+  if (!right || !rightCounts(mode)) return left
+  return {
+    withPunctuation: left.withPunctuation + right.withPunctuation,
+    withoutPunctuation: left.withoutPunctuation + right.withoutPunctuation,
+  }
+}
