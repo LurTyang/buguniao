@@ -30,7 +30,7 @@ import { Editor, type EditorProps } from './Editor.js'
 import { Boom } from './Boom.js'
 import type { DocLink } from '../pane-link.js'
 import type { PaneMode, RightSide } from '../split.js'
-import { rightPersistsScratch, rightSaves } from '../split.js'
+import { rightPersistsScratch, rightSaves, safeToSave } from '../split.js'
 
 const api = window.bugu
 
@@ -55,6 +55,8 @@ export interface SidePaneProps {
   onClose(): void
   /** 拖进来一个书外的文件，或者粘进来一段字 */
   onDropFile(path: string): void
+  /** 拖进来的东西没有硬盘路径（目录、网页选区）。要说一声，不能静默 */
+  onDropUnsupported(): void
   onPasteScratch(text: string): void
   /** 便笺的内容（`kind==='scratch'` 时用），以及改了之后往哪儿写 */
   scratch: string
@@ -79,6 +81,17 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
   const [err, setErr] = useState('')
   const [dirty, setDirty] = useState(false)
   const bodyRef = useRef('')
+  /*
+   * `bodyRef` 里这份正文，是**哪个路径**读回来的。
+   *
+   * ⚠️ 这不是冗余信息。换文档是异步的：`path` 先变，内容后到。
+   * 中间那一小段时间里 `bodyRef` 装的还是上一篇 —— 这会儿要是存盘，
+   * 存的就是「上一篇的正文，写进新那篇的文件」。
+   * 读失败的话这段时间是**永久的**。
+   *
+   * 判断本身在 split.ts 的 `safeToSave()`，那儿有测试钉着。
+   */
+  const loadedFor = useRef<string | null>(null)
   const timer = useRef(0)
 
   const path = right?.path ?? ''
@@ -94,9 +107,18 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
   useEffect(() => {
     let dead = false
     setReady(false)
+    /*
+     * 手里这份**先作废**。
+     *
+     * 从这一刻起到新内容读回来之前，`bodyRef` 装的是上一篇的正文，
+     * 而 `path` 已经是新那篇了 —— 这段时间里一个字都不许往盘上写。
+     * 读回来才重新认领；读失败就一直是 null，那正是我们要的。
+     */
+    loadedFor.current = null
     if (mode === 'scratch') {
       setBody(props.scratch)
       bodyRef.current = props.scratch
+      loadedFor.current = path
       setErr('')
       setReady(true)
       return
@@ -104,6 +126,7 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
     if (mode === 'shared') {
       setBody(sharedBody)
       bodyRef.current = sharedBody
+      loadedFor.current = path
       setErr('')
       setReady(true)
       return
@@ -120,10 +143,22 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
         if (dead) return
         setBody(text)
         bodyRef.current = text
+        // 认领：从这儿起，手里这份就是 path 那一篇了，可以往它身上存
+        loadedFor.current = path
         setErr('')
         setReady(true)
       } catch (e) {
         if (dead) return
+        /*
+         * 读不到就**一直不认领**。
+         *
+         * 手里还是上一篇的正文，此后任何一次存盘都会把它写进这一篇 ——
+         * 一篇稿子被另一篇整个覆盖，不报错、不提示。
+         *
+         * `ready` 也一直是假：手里那份是上一篇的，摆出来只会更让人糊涂
+         * （标题写着这一篇，正文却是上一篇的）。界面那边看 `err` 决定
+         * 显示「读着…」还是这条错。
+         */
         setErr(e instanceof Error ? e.message : String(e))
       }
     })()
@@ -136,7 +171,7 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
   }, [mode, path])
 
   const flush = useCallback(async () => {
-    if (!saves || !path) return
+    if (!safeToSave(mode, loadedFor.current, path)) return
     window.clearTimeout(timer.current)
     try {
       await api.saveDoc(path, bodyRef.current)
@@ -144,14 +179,20 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
     }
-  }, [saves, path])
+  }, [mode, path])
 
-  // 关掉/换文档之前把没存的存了。不然拖一下分隔线换个文档，刚写的就没了
+  /*
+   * 关掉/换文档之前把没存的存了。不然拖一下分隔线换个文档，刚写的就没了。
+   *
+   * cleanup 拿的是**上一次渲染**的 mode/path，而 `loadedFor` 是 ref，
+   * 拿的是此刻的值 —— 这正好是我们要问的那个问题：
+   * 「手里这份，是不是就是我要往上存的那一篇？」
+   */
   useEffect(() => {
     return () => {
-      if (saves && path && bodyRef.current) void api.saveDoc(path, bodyRef.current)
+      if (safeToSave(mode, loadedFor.current, path)) void api.saveDoc(path, bodyRef.current)
     }
-  }, [saves, path])
+  }, [mode, path])
 
   const onChange = useCallback(
     (next: string) => {
@@ -177,14 +218,31 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
    * 比「点按钮弹文件框」顺手得多 —— 作者手边那份参考多半正开在
    * 资源管理器里，拖过来是一个动作，而弹框要点四五下。
    *
-   * Electron 里 File 对象带 `path`，所以拿得到真实路径。
+   * 路径要问 preload 要（`webUtils.getPathForFile`）—— 渲染进程里
+   * 那个 `File.path` 在 Electron 32 就删了，读到的永远是 undefined。
    */
   const onDrop = useCallback(
     (e: React.DragEvent) => {
-      const f = e.dataTransfer.files[0] as (File & { path?: string }) | undefined
-      if (!f?.path) return
+      /*
+       * ⚠️ **第一行就得拦，不能等判断完再拦。**
+       *
+       * `onDragOver` 已经 preventDefault 放行了投放，这里再不拦，
+       * Chromium 就执行默认行为：**把窗口导航到那个 file:// 去**，
+       * 整个不咕鸟界面被这个文件顶掉，只能重启。
+       * 从前那个写法把 preventDefault 摆在早退之后，
+       * 于是「拿不到路径」这条最常见的路正好是最惨的那条。
+       */
       e.preventDefault()
-      props.onDropFile(f.path)
+      const f = e.dataTransfer.files[0]
+      if (!f) return
+      const p = api.pathForFile(f)
+      // 拖的是目录、是网页里的一段选区 —— 都没有硬盘路径。
+      // 说一声，别让作者以为软件没反应
+      if (!p) {
+        props.onDropUnsupported()
+        return
+      }
+      props.onDropFile(p)
     },
     [props],
   )
@@ -229,7 +287,14 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
 
       <div className="side-body">
         {!ready && path && mode !== 'empty' && mode !== 'scratch' ? (
-          <div className="side-empty">读着…</div>
+          /*
+           * 读不到 ≠ 还在读。
+           *
+           * 从前这两种都显示「读着…」，于是一个读失败的右半边会**永远**
+           * 转着圈 —— 错误条在上面挂着，正文这一格却还在说「快好了」，
+           * 两句话互相矛盾，作者只能猜哪句是真的。
+           */
+          <div className="side-empty">{err ? '这一篇打不开。' : '读着…'}</div>
         ) : mode === 'empty' || (!path && mode !== 'scratch') ? (
           /*
            * 空着的时候，三条路都摆在明面上。

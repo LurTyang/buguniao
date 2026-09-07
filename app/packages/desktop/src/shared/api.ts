@@ -687,6 +687,17 @@ export interface BuguApi {
   /** 订阅流式片段，返回取消订阅的函数 */
   onAiDelta(fn: (e: { requestId: string; kind: 'text' | 'thinking'; text: string }) => void): () => void
 
+  /**
+   * 拖进来的这个 `File` 在硬盘上的路径。拿不到返回空串。
+   *
+   * ⚠️ **不要退回去用 `File.path`** —— 那个属性 Electron 32 删了，
+   * 而它是可选属性，编译不会报错，只会在运行时静默地永远是 undefined。
+   * 唯一还能拿到路径的是 preload 里的 `webUtils.getPathForFile`。
+   *
+   * 同步的：它只是查一张表，不走 IPC。
+   */
+  pathForFile(file: File): string
+
   /** 剪切/复制/粘贴/全选/撤销/重做。走 Chromium 原生编辑命令，作用在当前焦点上 */
   editCmd(kind: 'cut' | 'copy' | 'paste' | 'selectAll' | 'undo' | 'redo'): Promise<void>
 

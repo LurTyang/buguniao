@@ -70,16 +70,16 @@ import type { AwardChoice, StatsState } from '../shared/api.js'
 /** `--smoke` 模式：跑一遍端到端流程后自动退出。见 smoke.ts */
 const SMOKE = process.argv.includes('--smoke')
 
+/** 摆到右边的参考文件：认这几种扩展名，最大 2MB */
+const TEXT_EXTS = new Set(['.md', '.txt', '.markdown', '.text', '.log', '.csv', '.json'])
+const MAX_REF_BYTES = 2 * 1024 * 1024
+
 /**
  * 一份主题 CSS 最大多少。
  *
  * Typora 主题一般十几 KB，带 base64 字体的能到几百 KB。给 2MB 已经很宽松，
  * 而它的作用是拦住「手滑选了个 200MB 的文件」—— 那会把界面直接卡死。
  */
-/** 摆到右边的参考文件：认这几种扩展名，最大 2MB */
-const TEXT_EXTS = new Set(['.md', '.txt', '.markdown', '.text', '.log', '.csv', '.json'])
-const MAX_REF_BYTES = 2 * 1024 * 1024
-
 const MAX_THEME_CSS = 2 * 1024 * 1024
 
 async function readThemeCssFile(
@@ -137,6 +137,23 @@ function createWindow(): BrowserWindow {
   win.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url)
     return { action: 'deny' }
+  })
+
+  /*
+   * 这扇窗子**只准显示界面自己那一页**，别的一律不许导航过去。
+   *
+   * 最常撞上的是拖放：往页面上拖一个文件，只要有哪一处 drop 处理器
+   * 忘了 `preventDefault()`，Chromium 就把窗口导航到那个 `file://`——
+   * 整个不咕鸟被这个文件的内容顶掉，作者只能重启，而且看不出发生了什么。
+   * （0.5 做双屏拖放时真踩过这一枪：早退摆在 preventDefault 前面。）
+   *
+   * 界面里那些「打开外部链接」的地方走的是 shell.openExternal，
+   * 不经过这里，所以拦死它不会挡住任何正常功能。
+   */
+  win.webContents.on('will-navigate', (e, url) => {
+    if (url === win.webContents.getURL()) return
+    e.preventDefault()
+    console.warn('[bugu] 拦下了一次窗口导航（界面不该整页跳走）:', url)
   })
 
   const devUrl = process.env['ELECTRON_RENDERER_URL']
@@ -334,14 +351,23 @@ function registerIpc(): void {
     if (st.size > MAX_REF_BYTES) {
       throw new Error(`这个文件有 ${Math.round(st.size / 1024)} KB，太大了，摆进来会卡。`)
     }
-    const text = await fsp.readFile(file, 'utf8')
+    const raw = await fsp.readFile(file, 'utf8')
     /*
      * UTF-16 的 BOM 会被 utf8 解码成一堆看不懂的字。
      * 与其显示一屏乱码让作者以为文件坏了，不如直接说「换成 UTF-8」。
      */
-    if (text.charCodeAt(0) === 0xfffd || text.includes(' ')) {
+    if (raw.charCodeAt(0) === 0xfffd || raw.includes('\u0000')) {
       throw new Error('这个文件不像是 UTF-8 文本 —— 换个编码另存一份再试。')
     }
+    /*
+     * UTF-8 的 BOM 要剥掉。
+     *
+     * 它解码出来是 U+FEFF —— 一个**零宽**字符，屏幕上看不见，
+     * 却实实在在占着正文第一个位置：第一行的缩进会差一格、
+     * 搜第一个词搜不到、复制出去还把它一起带走。
+     * 记事本和 VS Code 的「UTF-8 with BOM」另存都带它，很常见。
+     */
+    const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw
     return { text, name: path.basename(file) }
   })
 

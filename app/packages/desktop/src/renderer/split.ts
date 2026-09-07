@@ -102,6 +102,33 @@ export function rightSaves(mode: PaneMode): boolean {
 }
 
 /**
+ * 这份内存里的正文，**准不准写到这个路径上**。
+ *
+ * ─────────────────────────────────────────────────────────────
+ * `rightSaves` 只回答「这一半该不该存」，它不知道**手里这份内容是哪一篇的**。
+ * 而右半边换文档是异步的：路径先变，内容后到。中间那一小段时间里，
+ * 「该存」是真的，「手里的内容」却还是上一篇的。
+ *
+ * 撞上的两条路：
+ *   · 新那篇读失败（被外部删了、没权限）→ 内容永远停在上一篇，
+ *     此后任何一次关闭或再换，都会把**上一篇的正文写进新那篇的文件**
+ *   · 连着换两次（甲→乙→丙），读乙还在飞的时候就换丙了
+ *
+ * 两条的后果一样：一篇稿子被另一篇整个覆盖，不报错、不提示。
+ * 所以存之前必须核对一次「手里这份是不是就是它」——
+ * 这是个一行的判断，但它是丢不丢稿的分界，所以它有名字、有测试。
+ * ─────────────────────────────────────────────────────────────
+ *
+ * @param loadedFor 手里这份正文是**哪个路径**读回来的。还没读到就是 null
+ * @param path      这会儿要往哪儿存
+ */
+export function safeToSave(mode: PaneMode, loadedFor: string | null, path: string): boolean {
+  if (!rightSaves(mode)) return false
+  if (!path) return false
+  return loadedFor === path
+}
+
+/**
  * 右半边该不该把内容存进**配置**（而不是文件）。
  *
  * 只有便笺走这条。它不对应任何文件，但也不该关掉软件就没 ——
@@ -114,6 +141,21 @@ export function rightPersistsScratch(mode: PaneMode): boolean {
 /** 两边要不要接到同一根线上 */
 export function needsLink(mode: PaneMode): boolean {
   return mode === 'shared'
+}
+
+/**
+ * 一个路径的最后一段（文件名）。
+ *
+ * ⚠️ **两种分隔符都要切。** 书里的路径是 `/` 拼的，但书**外**那份参考
+ * 是拖进来的，在 Windows 上长这样：`D:\参考\旧稿.txt`。
+ * 只切 `/` 的话它一刀都切不下去，标题栏上就摆着一整条路径 ——
+ * 而标题栏存在的全部意义就是「扫一眼认出这是哪一篇」。
+ *
+ * 不咕鸟是 Windows 桌面端，所以这不是个边角情况，这是**默认情况**。
+ */
+export function baseName(p: string): string {
+  const segs = p.split(/[\\/]/).filter((s) => s !== '')
+  return segs.length > 0 ? (segs[segs.length - 1] as string) : p
 }
 
 /**

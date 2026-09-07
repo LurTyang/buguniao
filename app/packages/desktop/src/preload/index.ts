@@ -5,7 +5,7 @@
  * 也就无法调用未列出的通道。
  */
 
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 type IpcResult<T> = { ok: true; value: T } | { ok: false; error: string }
 
@@ -195,6 +195,25 @@ function onMenu(channel: string, fn: () => void): () => void {
   return () => ipcRenderer.off(channel, listener)
 }
 
+/**
+ * 拖进来的那个文件在硬盘上的路径。
+ *
+ * ⚠️ **不能用 `File.path`。** 那个属性 Electron 32 就删了（我们在 43），
+ * 渲染进程里读到的永远是 undefined —— 而它是个 `any` 味道的可选属性，
+ * TypeScript 不会拦你，于是拖放会**静默地什么都不做**，
+ * 看着像「这个文件不让拖」。
+ *
+ * 换成 `webUtils.getPathForFile`，它只能在 preload 里调。
+ * 拿不到路径（拖的是目录、是浏览器里的一段选区）时返回空串。
+ */
+function pathForFile(file: File): string {
+  try {
+    return webUtils.getPathForFile(file)
+  } catch {
+    return ''
+  }
+}
+
 /** AI 的流式片段。返回取消订阅的函数 */
 function onAiDelta(fn: (e: { requestId: string; kind: 'text' | 'thinking'; text: string }) => void): () => void {
   const listener = (_e: unknown, payload: { requestId: string; kind: 'text' | 'thinking'; text: string }) =>
@@ -203,4 +222,4 @@ function onAiDelta(fn: (e: { requestId: string; kind: 'text' | 'thinking'; text:
   return () => ipcRenderer.off('ai:delta', listener)
 }
 
-contextBridge.exposeInMainWorld('bugu', { ...api, onMenu, onAiDelta })
+contextBridge.exposeInMainWorld('bugu', { ...api, onMenu, onAiDelta, pathForFile })

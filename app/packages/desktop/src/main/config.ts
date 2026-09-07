@@ -11,7 +11,7 @@ import * as path from 'node:path'
 import { app } from 'electron'
 import { migrateConfig } from './config-migrate.js'
 import type { ThemeDraft } from '../shared/theme-draft.js'
-import type { RightSide } from '../shared/split-types.js'
+import { clampScratch, type RightSide } from '../shared/split-types.js'
 import { EMPTY_SLOT as _EMPTY, type ThemeSlot } from '../shared/theme-slots.js'
 import type { Award } from '@bugu/core'
 
@@ -162,7 +162,8 @@ export interface UserConfig {
    *
    * 存在配置里而不是文件里：它是**临时**参考，为它建个文件就得回答
    * 「存哪儿、什么时候删」，而那两个问题作者根本不想回答。
-   * 有上限，见 main/index.ts 的 MAX_SCRATCH。
+   *
+   * 有上限，见 shared/split-types.ts 的 `MAX_SCRATCH` / `clampScratch()`。
    */
   splitScratch: string
   /** 稿纸上下留白（像素）。0 = 老样子，顶着边 */
@@ -311,7 +312,18 @@ export async function saveConfig(next: UserConfig): Promise<void> {
 }
 
 export async function patchConfig(patch: Partial<UserConfig>): Promise<UserConfig> {
-  const next = { ...(await loadConfig()), ...patch }
+  /*
+   * 便笺的上限在**这儿**把，不在界面那边。
+   *
+   * 界面那边把不住：它有好几条路能写这个字段（粘贴、编辑器 onChange 防抖），
+   * 而配置文件是所有路的共同出口。漏一条的代价是配置里躺着几 MB 正文，
+   * 此后每次写配置都要连它一起重写。
+   */
+  const clamped =
+    typeof patch.splitScratch === 'string'
+      ? { ...patch, splitScratch: clampScratch(patch.splitScratch) }
+      : patch
+  const next = { ...(await loadConfig()), ...clamped }
   await saveConfig(next)
   return next
 }

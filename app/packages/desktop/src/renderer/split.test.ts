@@ -8,6 +8,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   DEFAULT_RATIO,
+  baseName,
   MAX_RATIO,
   MIN_RATIO,
   clampRatio,
@@ -18,6 +19,7 @@ import {
   rightFollowsLeft,
   rightPersistsScratch,
   rightSaves,
+  safeToSave,
   type RightSide,
 } from './split.js'
 
@@ -131,6 +133,64 @@ describe('什么时候要接那根线', () => {
     for (const m of ['off', 'empty', 'own', 'shared', 'scratch', 'ref'] as const) {
       expect(needsLink(m) && rightSaves(m)).toBe(false)
     }
+  })
+})
+
+describe('存之前核对「手里这份是不是就是它」', () => {
+  it('对得上才存', () => {
+    expect(safeToSave('own', '甲.md', '甲.md')).toBe(true)
+  })
+
+  it('【关键】手里还是上一篇 → 绝不存 —— 存了就是一篇覆盖另一篇', () => {
+    expect(safeToSave('own', '甲.md', '乙.md')).toBe(false)
+  })
+
+  it('【关键】还没读到任何内容 → 绝不存 —— 空内容存下去等于清空这一篇', () => {
+    expect(safeToSave('own', null, '乙.md')).toBe(false)
+  })
+
+  it('不该自己存的那几种，对得上也不存', () => {
+    for (const m of ['off', 'empty', 'shared', 'scratch', 'ref'] as const) {
+      expect(safeToSave(m, '甲.md', '甲.md')).toBe(false)
+    }
+  })
+
+  it('没有路径就没得存', () => {
+    expect(safeToSave('own', '', '')).toBe(false)
+  })
+
+  it('比 rightSaves 只严不松 —— 它说不存的，这儿一定也不存', () => {
+    for (const m of ['off', 'empty', 'own', 'shared', 'scratch', 'ref'] as const) {
+      if (!rightSaves(m)) expect(safeToSave(m, '甲.md', '甲.md')).toBe(false)
+    }
+  })
+})
+
+describe('从路径里抠文件名', () => {
+  it('书里的路径用 /', () => {
+    expect(baseName('正文/0003-第三章 出门.md')).toBe('0003-第三章 出门.md')
+  })
+
+  it('【关键】Windows 的反斜杠也要切 —— 拖进来的参考文件就长这样', () => {
+    expect(baseName('D:\\参考\\旧稿.txt')).toBe('旧稿.txt')
+    expect(baseName('C:\\Users\\某人\\Desktop\\设定.md')).toBe('设定.md')
+  })
+
+  it('混着用也认', () => {
+    expect(baseName('D:\\参考/子目录\\稿.txt')).toBe('稿.txt')
+  })
+
+  it('本来就只有一段就原样给回去', () => {
+    expect(baseName('稿.md')).toBe('稿.md')
+  })
+
+  it('末尾多一个分隔符不该切出空串来', () => {
+    expect(baseName('正文/子目录/')).toBe('子目录')
+    expect(baseName('D:\\参考\\')).toBe('参考')
+  })
+
+  it('空的不炸', () => {
+    expect(baseName('')).toBe('')
   })
 })
 

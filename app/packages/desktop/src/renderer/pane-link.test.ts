@@ -14,7 +14,7 @@
  * ─────────────────────────────────────────────────────────────
  */
 import { describe, it, expect } from 'vitest'
-import { ChangeSet, Text } from '@codemirror/state'
+import { ChangeSet, Text, Transaction } from '@codemirror/state'
 import {
   DocLink,
   FORWARDED,
@@ -65,8 +65,26 @@ describe('relaySpec', () => {
 
   it('带着「转发来的」标记，好让对面不再转回来', () => {
     const s = relaySpec(someChanges())
-    expect(s.annotations.type).toBe(FORWARDED)
-    expect(s.annotations.value).toBe(true)
+    const a = s.annotations.find((x) => x.type === FORWARDED)
+    expect(a).toBeDefined()
+    expect(a?.value).toBe(true)
+  })
+
+  it('【关键】转来的改动不进对面的撤销栈 —— 谁敲的谁撤', () => {
+    /*
+     * 漏了这一条的后果不是「少个功能」，是乱：两个视图各有一份 history()，
+     * 转发的改动也记进去，于是在右半边按 Ctrl+Z 撤掉的是左边刚敲的那句，
+     * 而这次撤销又会原路转回左边。交替撤几次没人说得清会发生什么。
+     */
+    const a = relaySpec(someChanges()).annotations.find((x) => x.type === Transaction.addToHistory)
+    expect(a).toBeDefined()
+    expect(a?.value).toBe(false)
+  })
+
+  it('【关键】撤销那一条必须是注解，不能是事务字段 —— 写成字段会被静默忽略', () => {
+    // CodeMirror 的 TransactionSpec 里没有 addToHistory 这个字段。
+    // 从前那个写法看起来设过了，实际一点用没有
+    expect('addToHistory' in relaySpec(someChanges())).toBe(false)
   })
 
   it('改动本身原样带过去', () => {

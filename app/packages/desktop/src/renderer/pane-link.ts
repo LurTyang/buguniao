@@ -37,12 +37,26 @@
  *
  * Editor 已经有 `externalRevision` —— 主进程改了正文时整份换掉。
  * 拿它来做双屏是错的：整份替换会**重置光标、清空撤销历史**，
- * 而且每敲一个字来一次。转发 changeset 才能让两边共用一部撤销史，
- * 光标也只是按改动挪一挪。
+ * 而且每敲一个字来一次。转发 changeset 光标只是按改动挪一挪。
+ *
+ * 【撤销归谁】
+ *
+ * 转发过去的改动**不进对面的撤销栈**（`addToHistory: false`）。
+ *
+ * 这一条一开始写漏了，而漏掉的后果不是「少了个功能」，是**乱**：
+ * 两个 EditorView 各有一份 `history()`，谁都不知道对方存在。
+ * 转发的改动要是也记进去，两边就各攒了一份「我自己的 + 镜像来的」，
+ * 于是在右半边按 Ctrl+Z，撤掉的是**左边刚敲的那句**；
+ * 而这次撤销不带转发标记，又会原路转回左边去。
+ * 两边交替撤几次，没人说得清下一次 Ctrl+Z 会发生什么。
+ *
+ * 定成「谁敲的谁撤」：改动在哪一半发生，就只在那一半的撤销史里。
+ * 这跟右半边的定位也是一致的 —— 它是拿来**对照**的，
+ * 不是第二个主编辑器。
  * ─────────────────────────────────────────────────────────────
  */
 
-import { Annotation, type ChangeSet } from '@codemirror/state'
+import { Annotation, Transaction, type ChangeSet } from '@codemirror/state'
 
 /**
  * 「这条事务是从对面转发过来的」。
@@ -77,7 +91,17 @@ export interface Peer {
 
 export interface RelaySpec {
   changes: ChangeSet
-  annotations: ReturnType<typeof FORWARDED.of>
+  /**
+   * 两条注解，缺一不可：
+   *
+   *   · `FORWARDED`                  —— 对面别再转回来，否则无限弹
+   *   · `Transaction.addToHistory(false)` —— 别进对面的撤销栈，谁敲的谁撤
+   *
+   * ⚠️ 撤销这一条**必须走注解**。CodeMirror 的事务规格里没有
+   * `addToHistory` 这个字段，写成字段会被**静默忽略** ——
+   * 看起来像设过了，实际一点用没有。
+   */
+  annotations: Array<ReturnType<typeof FORWARDED.of> | ReturnType<typeof Transaction.addToHistory.of>>
   /** 显式写死 false —— 这一行就是「右边不许跳」的全部实现 */
   scrollIntoView: false
 }
@@ -93,7 +117,7 @@ export interface RelaySpec {
 export function relaySpec(changes: ChangeSet): RelaySpec {
   return {
     changes,
-    annotations: FORWARDED.of(true),
+    annotations: [FORWARDED.of(true), Transaction.addToHistory.of(false)],
     scrollIntoView: false,
   }
 }

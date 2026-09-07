@@ -38,7 +38,7 @@ import { VersionClash } from './VersionClash.js'
 import { QuickJump } from './QuickJump.js'
 import { SidePane } from './SidePane.js'
 import { DocLink } from '../pane-link.js'
-import { DEFAULT_RATIO, clampRatio, needsLink, paneMode, ratioFromDrag } from '../split.js'
+import { DEFAULT_RATIO, baseName, clampRatio, needsLink, paneMode, ratioFromDrag } from '../split.js'
 import { LinksPanel } from './LinksPanel.js'
 import { TrashPanel } from './TrashPanel.js'
 import { ScriptPanel } from './ScriptPanel.js'
@@ -844,12 +844,13 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
   const rightTitle = useMemo(() => {
     const r = settings.splitRight
     if (!r?.path) return ''
-    const base = (p: string): string => p.split(/[\/]/).pop() ?? p
-    if (r.kind === 'file') return base(r.path)
+    // baseName 在 split.ts —— 它得同时切 / 和 \，
+    // 因为拖进来的参考文件在 Windows 上是反斜杠的
+    if (r.kind === 'file') return baseName(r.path)
     const hit = chapters.find((c) => c.path === r.path)
     if (hit) return hit.title
     const inOutline = tree?.outline.find((n) => n.path === r.path)
-    return inOutline?.title ?? base(r.path).replace(/\.md$/i, '')
+    return inOutline?.title ?? baseName(r.path).replace(/\.md$/i, '')
   }, [settings.splitRight, chapters, tree])
 
   const volumes = useMemo(
@@ -1557,6 +1558,7 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
                   splitScratch: t,
                 })
               }}
+              onDropUnsupported={() => flash('这个拖不进来 —— 只能拖单个文本文件，目录和网页里的选区都不行。')}
               onDropFile={(p) => {
                 /*
                  * 拖进来之前先读一遍。
