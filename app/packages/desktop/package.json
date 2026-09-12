@@ -1,6 +1,6 @@
 {
   "name": "@bugu/desktop",
-  "version": "0.4.0",
+  "version": "0.5.0-preview.3",
   "private": true,
   "license": "GPL-3.0-or-later",
   "type": "module",
@@ -14,7 +14,8 @@
     "preview": "electron-vite preview",
     "smoke": "electron-vite build && electron . --smoke",
     "pack": "electron-vite build && electron-builder --win --dir",
-    "dist": "electron-vite build && electron-builder --win"
+    "dist": "electron-vite build && electron-builder --win --publish never",
+    "release": "electron-vite build && electron-builder --win --publish never && node scripts/release.mjs"
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.120.0",
@@ -62,6 +63,12 @@
     "win": {
       "target": [
         {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
           "target": "portable",
           "arch": [
             "x64"
@@ -77,7 +84,12 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "不咕鸟",
-      "artifactName": "buguniao-setup-${version}.exe"
+      "artifactName": "buguniao-setup-${version}.exe",
+      "deleteAppDataOnUninstall": false,
+      "installerLanguages": [
+        "zh_CN"
+      ],
+      "language": "2052"
     },
     "portable": {
       "artifactName": "buguniao-${version}-win-x64.exe"
