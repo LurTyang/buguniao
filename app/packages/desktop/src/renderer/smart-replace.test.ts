@@ -17,6 +17,9 @@ import {
   pairSide,
   replaceOn,
   shownAs,
+  wrapWith,
+  WRAP_PAIRS,
+  WRAP_SAME,
   type PairRule,
   type Rule,
 } from './smart-replace.js'
@@ -151,5 +154,73 @@ describe('配置文件会变老，这一层不许被它炸', () => {
 
   it('数组里混进 null 不影响别的规则', () => {
     expect(liveRules([null, makeRule(';', '：', 'a')] as never, true)).toHaveLength(1)
+  })
+})
+
+describe('选中一段字再打符号：裹起来，不是换掉', () => {
+  it('【关键】引号给的是一对，不是一个', () => {
+    expect(wrapWith("'", DEF)).toEqual({ open: '“', close: '”' })
+    expect(wrapWith('"', DEF)).toEqual({ open: '「', close: '」' })
+  })
+
+  it('【关键】书名号也是一对', () => {
+    expect(wrapWith('<', DEF)).toEqual({ open: '《', close: '》' })
+  })
+
+  it('【关键】裹第二次还是一对 —— 不数这一行里已有几个引号', () => {
+    // 光标是点的时候要交替（pairSide），裹选区时**绝不能**交替：
+    // 交替一次就给出 ”句子”，两个都是关引号，而且看着很像对的
+    expect(wrapWith("'", DEF)).toEqual(wrapWith("'", DEF))
+  })
+
+  it('Markdown 那几个前后一样：* _ ~ 反引号', () => {
+    expect(wrapWith('*', DEF)).toEqual({ open: '*', close: '*' })
+    expect(wrapWith('~', DEF)).toEqual({ open: '~', close: '~' })
+    expect(wrapWith('_', DEF)).toEqual({ open: '_', close: '_' })
+    expect(wrapWith('`', DEF)).toEqual({ open: '`', close: '`' })
+  })
+
+  it('输入法直接上屏的中文标点也认', () => {
+    expect(wrapWith('“', [])).toEqual({ open: '“', close: '”' })
+    expect(wrapWith('《', [])).toEqual({ open: '《', close: '》' })
+    expect(wrapWith('【', [])).toEqual({ open: '【', close: '】' })
+  })
+
+  it('【关键】上屏的是关的那一半，照样给一整对', () => {
+    // 输入法记着上一个引号，这一下给你的是 ”。人的意思没变
+    expect(wrapWith('”', [])).toEqual({ open: '“', close: '”' })
+    expect(wrapWith('》', [])).toEqual({ open: '《', close: '》' })
+  })
+
+  it('【关键】总开关关着时，裹这件事不跟着关', () => {
+    // 关掉的是「把我打的符号换成中文标点」，不是「可以把我选中的字吃掉」
+    expect(wrapWith('"', liveRules(SEED_RULES, false))).toEqual({ open: '"', close: '"' })
+    expect(wrapWith('*', [])).toEqual({ open: '*', close: '*' })
+  })
+
+  it('作者改了规则，裹出来的跟着改', () => {
+    const mine = liveRules([{ id: 'c1', kind: 'pair', from: "'", open: '『', close: '』' }], true)
+    expect(wrapWith("'", mine)).toEqual({ open: '『', close: '』' })
+  })
+
+  it('裹不了的照旧不插手 —— 汉字、句号，那时候人确实是想改写', () => {
+    expect(wrapWith('好', DEF)).toBeNull()
+    expect(wrapWith('。', DEF)).toBeNull()
+    expect(wrapWith('；', DEF)).toBeNull()
+  })
+
+  it('【关键】直来直去的替换规则不参与 —— 它没有开关两头', () => {
+    // ; → ： 裹不了东西：裹出来会是 ：句子：
+    expect(wrapWith(';', DEF)).toBeNull()
+  })
+
+  it('输入法一次上屏一整个词时不插手', () => {
+    expect(wrapWith('你好', DEF)).toBeNull()
+    expect(wrapWith('', DEF)).toBeNull()
+  })
+
+  it('两张内置表不许抢同一个字符 —— 抢了就「时灵时不灵」', () => {
+    const both = [...WRAP_PAIRS.flatMap((p) => [p.open, p.close]), ...WRAP_SAME]
+    expect(new Set(both).size).toBe(both.length)
   })
 })

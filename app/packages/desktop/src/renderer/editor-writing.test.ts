@@ -17,7 +17,8 @@
  */
 import { describe, it, expect } from 'vitest'
 import { EditorState } from '@codemirror/state'
-import { focusKeep, shouldRecenter } from './editor-writing.js'
+import { focusKeep, shouldRecenter, wrapSpec } from './editor-writing.js'
+import { SEED_RULES, liveRules } from './smart-replace.js'
 
 /** 把光标放在第 n 行第 col 个字符处，返回亮着的行号区间 */
 function keepAt(lines: string[], n: number, col = 0): [number, number] {
@@ -147,5 +148,78 @@ describe('打字机模式：双屏里另一半一动不动', () => {
 
   it('有焦点的那一半照常回中', () => {
     expect(f({ focused: true, docChanged: true })).toBe(true)
+  })
+})
+
+/**
+ * 裹选区：选中一段字再打成对的符号，那段字要被裹进去，不是被顶掉。
+ *
+ * 默认行为（不接管）是**选中的那段字被这一个符号替换掉** ——
+ * 划出一句话想加引号，手指落下去那句话就没了。
+ * 所以这儿测的不是「裹得好不好看」，是「那段字还在不在」。
+ */
+describe('裹选区', () => {
+  const DEF = liveRules(SEED_RULES, true)
+
+  /** 选中 [from,to) 打一个字符，返回裹完的正文和还选着的那一段 */
+  function wrap(doc: string, from: number, to: number, typed: string, rules = DEF) {
+    const state = EditorState.create({ doc, selection: { anchor: from, head: to } })
+    const spec = wrapSpec(state, typed, rules)
+    if (!spec) return null
+    const next = state.update(spec).state
+    return { doc: next.doc.toString(), sel: next.sliceDoc(next.selection.main.from, next.selection.main.to) }
+  }
+
+  it('【关键】选中的那段字一个都不少', () => {
+    expect(wrap('他说你好啊', 2, 4, "'")?.doc).toBe('他说“你好”啊')
+  })
+
+  it('【关键】书名号是一对，不是两个开的也不是两个关的', () => {
+    expect(wrap('看了红楼梦', 2, 5, '<')?.doc).toBe('看了《红楼梦》')
+  })
+
+  it('【关键】连着裹两次，第二次还是一对开一对关', () => {
+    // 光标是点的时候成对符号要交替（pairSide 数这一行已有几个）。
+    // 裹选区时复用那套就会给出 ”你好”，两个都是关引号
+    const once = wrap('他说你好啊', 2, 4, "'")!
+    const state = EditorState.create({ doc: once.doc, selection: { anchor: 3, head: 5 } })
+    const twice = state.update(wrapSpec(state, "'", DEF)!).state
+    expect(twice.doc.toString()).toBe('他说““你好””啊')
+  })
+
+  it('裹完原文还选着 —— 于是 * 打两下就是加粗', () => {
+    const once = wrap('这里是重点', 3, 5, '*')!
+    expect(once.doc).toBe('这里是*重点*')
+    expect(once.sel).toBe('重点')
+
+    const state = EditorState.create({ doc: once.doc, selection: { anchor: 4, head: 6 } })
+    const twice = state.update(wrapSpec(state, '*', DEF)!).state
+    expect(twice.doc.toString()).toBe('这里是**重点**')
+    expect(twice.sliceDoc(twice.selection.main.from, twice.selection.main.to)).toBe('重点')
+  })
+
+  it('从后往前选的，裹完还是从后往前选着', () => {
+    const state = EditorState.create({ doc: '他说你好啊', selection: { anchor: 4, head: 2 } })
+    const next = state.update(wrapSpec(state, "'", DEF)!).state
+    expect(next.selection.main.anchor).toBe(5)
+    expect(next.selection.main.head).toBe(3)
+  })
+
+  it('跨行选也照裹 —— 裹永远不会弄丢字，拦下来才会', () => {
+    expect(wrap('第一行\n第二行', 0, 7, '~')?.doc).toBe('~第一行\n第二行~')
+  })
+
+  it('光标只是一个点时这条不管 —— 那是插标点，走另一条路', () => {
+    const state = EditorState.create({ doc: '他说', selection: { anchor: 2 } })
+    expect(wrapSpec(state, "'", DEF)).toBeNull()
+  })
+
+  it('裹不了的符号不插手，让编辑器照常替换', () => {
+    expect(wrap('他说你好啊', 2, 4, '好')).toBeNull()
+    expect(wrap('他说你好啊', 2, 4, ';')).toBeNull()
+  })
+
+  it('【关键】总开关关着时，裹出来的是半角的那一对，不是把字吃掉', () => {
+    expect(wrap('他说你好啊', 2, 4, '"', liveRules(SEED_RULES, false))?.doc).toBe('他说"你好"啊')
   })
 })

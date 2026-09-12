@@ -1258,6 +1258,7 @@ export function runSmoke(win: BrowserWindow, tempRoot: string): void {
               splitBits: string
               writeBits: string
               dropBits: string
+              wrapBits: string
             }
             steps.push({ name: '【关键】点开一本书之后稿纸不是白的', ok: opened.ok, detail: opened.detail })
             /*
@@ -1416,6 +1417,30 @@ export function runSmoke(win: BrowserWindow, tempRoot: string): void {
               detail: drop.onLeft ?? opened.dropBits,
             })
 
+            /*
+             * 选中一段字再打符号 = 裹起来（0.5.0-preview.3）。
+             *
+             * 两条分开验：「那两个字还在不在」和「裹出来的是不是一对」。
+             * 只验后一条的话，接线断了也可能碰巧过 —— 而前一条才是这个
+             * 功能存在的理由：改稿时划出一句话加引号，那句话不能没。
+             */
+            let wrap: { picked?: string; head?: string; kept?: boolean; paired?: boolean } = {}
+            try {
+              wrap = JSON.parse(opened.wrapBits) as typeof wrap
+            } catch {
+              wrap = {}
+            }
+            steps.push({
+              name: '【关键】选中一段字再打引号，那段字没被顶掉',
+              ok: wrap.kept === true,
+              detail: opened.wrapBits,
+            })
+            steps.push({
+              name: '【关键】裹出来的是一对（“ 在前 ” 在后）',
+              ok: wrap.paired === true,
+              detail: opened.wrapBits,
+            })
+
             for (const s of steps) {
               if (!s.ok) problems.push(`步骤失败「${s.name}」${s.detail ? ' —— ' + s.detail : ''}`)
             }
@@ -1450,7 +1475,7 @@ const OPEN_BOOK_SCRIPT = `(async () => {
 
     const cards = Array.from(document.querySelectorAll('.book-card'))
       .filter(function (el) { return el.className.indexOf('idea-card') < 0 })
-    if (cards.length === 0) return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', dropBits: '', detail: '书架上一本书都没有，点不进去' }
+    if (cards.length === 0) return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', dropBits: '', wrapBits: '', detail: '书架上一本书都没有，点不进去' }
 
     cards[0].click()
     for (var i = 0; i < 40; i++) {
@@ -1459,7 +1484,7 @@ const OPEN_BOOK_SCRIPT = `(async () => {
     }
     await sleep(500)
 
-    if (!has('.work')) return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', dropBits: '', detail: '点了之后没有 .work' }
+    if (!has('.work')) return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', dropBits: '', wrapBits: '', detail: '点了之后没有 .work' }
 
     // 目录树里点开第一篇 —— 进书之后默认可能没打开任何文档
     var docs = Array.from(document.querySelectorAll('.tree-chapter, .tree-item'))
@@ -1493,10 +1518,10 @@ const OPEN_BOOK_SCRIPT = `(async () => {
     var cmText = cm ? (cm.innerText || '').replace(/\s+/g, '') : ''
 
     if (!bits.editor) {
-      return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', dropBits: '', detail: '稿纸里没有编辑器：' + JSON.stringify(bits) }
+      return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', dropBits: '', wrapBits: '', detail: '稿纸里没有编辑器：' + JSON.stringify(bits) }
     }
     if (cmText.length === 0) {
-      return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', dropBits: '', detail: '编辑器在但一个字都没有：' + JSON.stringify(bits) }
+      return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', dropBits: '', wrapBits: '', detail: '编辑器在但一个字都没有：' + JSON.stringify(bits) }
     }
     /*
      * 实地验一次「翻译出来的选择器到底命不命中」。
@@ -1617,6 +1642,59 @@ const OPEN_BOOK_SCRIPT = `(async () => {
       })
     }
 
+    /*
+     * 【包裹选区】选中一段字再打个引号，那段字要被裹进去，不是被顶掉。
+     *
+     * 只有在真界面上验得了：逻辑那两层（wrapWith / wrapSpec）有 21 个
+     * 单元测试钉着，但它们全都绕开了同一个问题 ——
+     * **CodeMirror 到底把这一下交不交给我们。**
+     *
+     * 接线断了不会报错，表现正是这个功能要来堵的那件事本身：
+     * 选中的那句话被一个引号替换掉。所以这一步量的是「那两个字还在不在」。
+     */
+    var wrapBits = 'no-editor'
+    var wrapCm = document.querySelector('.paper .cm-content')
+    var wrapLines = Array.prototype.slice.call(document.querySelectorAll('.paper .cm-line'))
+    // 挑一行正文，不挑标题 —— 标题那行被语法高亮拆成了好几个 span
+    var wrapIdx = -1
+    for (var wi = 0; wi < wrapLines.length; wi++) {
+      if (wrapLines[wi].className.indexOf('cm-p') > -1 && (wrapLines[wi].innerText || '').length >= 3) {
+        wrapIdx = wi
+        break
+      }
+    }
+    if (wrapCm && wrapIdx > -1) {
+      // 行里可能套着高亮 span，一路往下找到第一个真的文本节点
+      var wNode = wrapLines[wrapIdx]
+      while (wNode && wNode.nodeType !== 3) wNode = wNode.firstChild
+      if (wNode && wNode.textContent.length >= 2) {
+        var picked = wNode.textContent.slice(0, 2)
+        wrapCm.focus()
+        var wsel = window.getSelection()
+        var wrng = document.createRange()
+        wrng.setStart(wNode, 0)
+        wrng.setEnd(wNode, 2)
+        wsel.removeAllRanges()
+        wsel.addRange(wrng)
+        await sleep(200)
+        // 单引号写成 fromCharCode：这段脚本整个住在一个模板字符串里，
+        // 而 smoke-source.test.ts 会数每一行的引号 —— 奇数就说明有一头没闭上。
+        // 那条规矩值钱（少一个引号整段脚本就废了），不为这一处破例
+        document.execCommand('insertText', false, String.fromCharCode(39))
+        await sleep(400)
+        var lineNow =
+          (document.querySelectorAll('.paper .cm-line')[wrapIdx] || {}).innerText || ''
+        wrapBits = JSON.stringify({
+          picked: picked,
+          head: lineNow.slice(0, 6),
+          // 被顶掉的话这两个字就没了 —— 这一条是这个功能的全部理由
+          kept: lineNow.indexOf(picked) > -1,
+          // 而且要是一对：左边开右边关，不是两个右引号
+          paired: lineNow.indexOf('\u201c' + picked + '\u201d') === 0,
+        })
+      }
+    }
+
     var probe = document.createElement('style')
     probe.textContent = '.bugu-write .cm-p{color:rgb(1,2,3) !important}'
     document.head.appendChild(probe)
@@ -1704,11 +1782,12 @@ const OPEN_BOOK_SCRIPT = `(async () => {
       splitBits: splitBits,
       writeBits: writeBits,
       dropBits: dropBits,
+      wrapBits: wrapBits,
       classed: bits.classed,
       detail: '正文 ' + cmText.length + ' 个字，' + JSON.stringify(bits),
     }
   } catch (e) {
-    return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', dropBits: '', detail: '点开时抛了：' + String((e && e.message) || e) }
+    return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', dropBits: '', wrapBits: '', detail: '点开时抛了：' + String((e && e.message) || e) }
   }
 })()`
 

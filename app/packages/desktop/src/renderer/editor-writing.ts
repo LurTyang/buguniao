@@ -8,9 +8,16 @@
  * 职责（装配、剧本排版、装饰）不是一回事 —— 它们管的是**手感**。
  */
 
-import { EditorSelection, RangeSetBuilder, type Extension, type Text } from '@codemirror/state'
+import {
+  EditorSelection,
+  RangeSetBuilder,
+  type EditorState,
+  type Extension,
+  type Text,
+  type TransactionSpec,
+} from '@codemirror/state'
 import { Decoration, EditorView, ViewPlugin, type DecorationSet, type ViewUpdate } from '@codemirror/view'
-import { replaceOn, type Rule } from './smart-replace.js'
+import { replaceOn, wrapWith, type Rule } from './smart-replace.js'
 
 // ───────────────────────── 打字机模式 ─────────────────────────
 
@@ -238,7 +245,43 @@ export function focusMode(): Extension {
 // ───────────────────────── 智能替换 ─────────────────────────
 
 /**
- * 打标点时顺手换成中文该有的样子。
+ * 选中一段字时打了个符号，这一笔该怎么下。裹不了就返回 null。
+ *
+ * 单拎出来是为了**能测**：它只认 `EditorState`，不碰视图、不碰 DOM，
+ * 而这一层错了的后果是「作者选中的那一段字没了」—— 最不该靠肉眼发现的那类。
+ *
+ * 裹完之后原文**还选着**（选区整体右移一个开符号的长度）：
+ * 于是 `*` 连打两下就是 `**重点**`，引号打完还能接着加书名号。
+ */
+export function wrapSpec(
+  state: EditorState,
+  typed: string,
+  rules: readonly Rule[],
+): TransactionSpec | null {
+  const main = state.selection.main
+  if (main.empty) return null
+  const pair = wrapWith(typed, rules)
+  if (!pair) return null
+
+  const shift = pair.open.length
+  return {
+    changes: [
+      { from: main.from, insert: pair.open },
+      { from: main.to, insert: pair.close },
+    ],
+    // 自己算，不靠 changes 去映射：位置正好落在插入点上时，
+    // 映射到符号的左边还是右边是看 assoc 的，而这儿要的是「都在里头」
+    selection: EditorSelection.range(main.anchor + shift, main.head + shift),
+    userEvent: 'input.wrap',
+    scrollIntoView: true,
+  }
+}
+
+/**
+ * 接管「打了一个字符」这一下，两条路：
+ *
+ *   · **光标是一个点** → 打标点时顺手换成中文该有的样子（`replaceOn`）
+ *   · **选中了一片字** → 成对的符号把它裹起来，不是顶掉（`wrapSpec`）
  *
  * `getRules` 是个函数而不是一份数组：作者在设置里改了开关要立刻生效，
  * 而重建编辑器会丢掉光标和撤销历史。
@@ -252,14 +295,30 @@ export function focusMode(): Extension {
  *
  * 一笔搞定（直接插替换后的字符）会让 Ctrl+Z 把整个输入都撤掉 ——
  * 打了个引号想反悔，结果连引号都没了，人就不敢打字了。
+ *
+ * **裹选区那条相反，是一笔。** 那儿撤销要退回的是「没裹之前那段字」，
+ * 而不是「一个把整段顶掉的引号」—— 后者压根不是他想要的东西。
  * ─────────────────────────────────────────────────────────────
  */
 export function smartReplace(getRules: () => readonly Rule[]): Extension {
   return EditorView.inputHandler.of((view, from, to, text) => {
     const rules = getRules()
+
+    // 选中了一片字：先看这个符号能不能把它裹起来。
+    // 这条路**不受总开关管**，所以放在 rules 为空那句之前 —— 理由见 wrapWith
+    if (from !== to) {
+      // inputHandler 报的这一段跟主选区对不上时不插手（多光标、组合输入的中途）
+      const main = view.state.selection.main
+      if (main.from !== from || main.to !== to) return false
+      const spec = wrapSpec(view.state, text, rules)
+      if (!spec) return false
+      // **一笔**。撤销一次就把两头的符号一起去掉，原文还选着 ——
+      // 不像插标点那条要分两笔（那儿撤销要留下他打的那个字符，这儿不留）
+      view.dispatch(spec)
+      return true
+    }
+
     if (rules.length === 0) return false
-    // 有选区时不插手：那是「用输入替换一段」，不是在行末打标点
-    if (from !== to) return false
 
     const line = view.state.doc.lineAt(from)
     const lineBefore = view.state.doc.sliceString(line.from, from)
