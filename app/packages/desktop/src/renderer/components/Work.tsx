@@ -2094,7 +2094,6 @@ function StatsPanel({
   bookPath: string
   today: TodayProgress | null
   counts: { withPunctuation: number; withoutPunctuation: number }
-  /** 这两个数是不是左右合计的。是的话标题不能再写「本章」 */
   /** 这两个数数的是哪一篇（「本章」/「右边」）。见 split.ts 的 countsName */
   countsLabel: string
   bookTitle: string

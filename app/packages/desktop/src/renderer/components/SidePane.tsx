@@ -203,7 +203,8 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
   }, [mode, path])
 
   /*
-   * 把这一半有多少字**报出去**。顶栏那个数是两边合计的。
+   * 把这一半有多少字**报出去**。顶栏那个数数的是有光标的那一篇
+   * （见 split.ts 的 countsSide），右边这一份是它的另一半来源。
    *
    * `ready` 之前一律报空串 —— 那会儿 `body` 装的还是上一篇的正文，
    * 拿它去凑合计就是个假数，而且它会在读完的那一瞬跳一下。

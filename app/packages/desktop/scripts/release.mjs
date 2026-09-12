@@ -55,9 +55,38 @@ const PACKAGE_EXT = new Set(['.exe', '.blockmap', '.dmg', '.appimage', '.zip'])
  */
 const SCRAP = /\.nsis\.7z$/i
 
-/** 这一份是不是当前版本的产物。认版本号，不认文件名长什么样 */
-function isCurrent(name, version) {
-  return name.includes(version)
+/**
+ * 这一版**应该**产出哪几个文件 —— 直接问打包配置要。
+ *
+ * ⚠️ **不能用「文件名里含不含版本号」来判。**
+ *
+ * 发 0.5.0 正式版那天，`buguniao-0.5.0-preview.3-win-x64.exe` 这个名字里
+ * 同样含着 `0.5.0`。于是那个预览版不但不会被收进历史版本，
+ * 还会被当成这一版的产物算进 `SHA256SUMS.txt` ——
+ * 发出去的校验清单里混着一个根本不是这一版的包，
+ * 而这份清单的全部用处就是让人确认「我手上这个是不是你发的」。
+ *
+ * 版本号是个前缀关系（`1.0.0` 是 `1.0.0-rc.1` 的前缀），拿它做子串判断
+ * 永远会在「正式版跟着预览版发」的那一天出错 —— 而那一天一定会来。
+ */
+function expectedNames(pkg, version) {
+  const b = pkg.build ?? {}
+  const fill = (t) =>
+    t
+      .replaceAll('${version}', version)
+      .replaceAll('${name}', pkg.name ?? '')
+      .replaceAll('${productName}', b.productName ?? '')
+      .replaceAll('${arch}', 'x64')
+      .replaceAll('${ext}', 'exe')
+  const out = new Set()
+  for (const t of [b.nsis?.artifactName, b.portable?.artifactName, b.win?.artifactName]) {
+    if (typeof t !== 'string' || t.length === 0) continue
+    const name = fill(t)
+    out.add(name)
+    // 安装版旁边那个 .blockmap 是它的附属物，跟着它算这一版的
+    out.add(`${name}.blockmap`)
+  }
+  return out
 }
 
 async function sha256(file) {
@@ -73,14 +102,30 @@ function mb(bytes) {
 
 const pkg = JSON.parse(await readFile(path.join(pkgDir, 'package.json'), 'utf8'))
 const version = pkg.version
+const expected = expectedNames(pkg, version)
 
 const entries = await readdir(releaseDir, { withFileTypes: true })
 const packages = entries
   .filter((e) => e.isFile() && PACKAGE_EXT.has(path.extname(e.name).toLowerCase()))
   .map((e) => e.name)
 
+const current = packages.filter((n) => expected.has(n) && n.toLowerCase().endsWith('.exe'))
+
+/*
+ * **先确认这一版的包在，再动别的。**
+ *
+ * 名字是从配置模板拼出来的，配置改了而这儿没跟上时，`expected` 会一个都对不上 ——
+ * 那时候若先挪后查，这一脚会把**刚打出来的包**一起收进历史版本，
+ * 根目录空空如也。所以这句必须在任何 rename 之前。
+ */
+if (current.length === 0) {
+  console.error(`release/ 里没有 ${version} 的包（期待：${[...expected].join('、')}）。`)
+  console.error('先 pnpm dist 再跑这个脚本；名字对不上的话，看 package.json 里的 artifactName。')
+  process.exit(1)
+}
+
 // ── 1. 旧版本挪进阁楼 ───────────────────────────────────────
-const old = packages.filter((n) => !isCurrent(n, version))
+const old = packages.filter((n) => !expected.has(n))
 if (old.length > 0) {
   await mkdir(atticDir, { recursive: true })
   for (const name of old) {
@@ -105,12 +150,6 @@ for (const name of entries.filter((e) => e.isFile() && SCRAP.test(e.name)).map((
 }
 
 // ── 3. 当前版本的校验值 ─────────────────────────────────────
-const current = packages.filter((n) => isCurrent(n, version) && n.toLowerCase().endsWith('.exe'))
-if (current.length === 0) {
-  console.error(`release/ 里没有 ${version} 的包。先 pnpm dist 再跑这个脚本。`)
-  process.exit(1)
-}
-
 const lines = []
 for (const name of current.sort()) {
   const file = path.join(releaseDir, name)

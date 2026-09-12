@@ -116,7 +116,18 @@ export function SplitDrop(props: SplitDropProps): React.ReactElement {
           e.preventDefault()
           openMenu(e.currentTarget)
         }}
-        onDragEnter={() => setHot(true)}
+        /*
+         * 接不住的东西**不许把框点亮**。
+         *
+         * 虚线框亮起来在所有软件里都是同一句话「这儿可以放」，
+         * 而从稿纸上拖一段选中的文字过来（它带的是 text/plain）是接不住的 ——
+         * 亮着让人松手，松手没反应，那是最难受的一种坏法。
+         * `types` 在 dragenter 里就能读（读不了的是 getData），所以判得起。
+         */
+        onDragEnter={(e) => {
+          if (splitDropKind(e) === 'none') return
+          setHot(true)
+        }}
         onDragOver={(e) => {
           if (splitDropKind(e) === 'none') return
           e.preventDefault()
