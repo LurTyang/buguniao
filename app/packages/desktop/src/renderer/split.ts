@@ -174,31 +174,6 @@ export function rightFollowsLeft(): boolean {
   return false
 }
 
-/**
- * 右半边的字数**算不算进**顶栏那个数。
- *
- * ─────────────────────────────────────────────────────────────
- * 作者定的：**两边合计。**
- *
- * 原来的备选是「以有焦点的那一半为准」，那条有个当场就能看见的毛病：
- * 数字会跟着点哪儿变。左边点一下 3,200，右边点一下 1,400 ——
- * 同一份活，两个数交替闪，作者没法拿它判断任何事情。
- * 合计是个**稳定**的数：它只在真敲了字的时候变。
- *
- * ⚠️ **只有 `shared` 是例外，而且必须是例外。**
- * 那时候左右是**同一份文档的两个视图** —— 一章三千字，
- * 两边一加就成了六千。那不是「合计」，那是把同一份稿子数了两遍，
- * 而且它偏偏在最有用的那种摆法（对着开头改结尾）上出错。
- *
- * 便笺和书外的参考**算**。它们确实是「摆在右边的另一堆字」，
- * 而作者要的就是两边合计；数字旁边写清楚哪一半贡献了多少，
- * 他一眼能看出这 800 字是参考资料还是他自己写的。
- * ─────────────────────────────────────────────────────────────
- */
-export function rightCounts(mode: PaneMode): boolean {
-  return mode === 'own' || mode === 'scratch' || mode === 'ref'
-}
-
 /** 一份正文的两个字数。跟 core/wordcount 出来的形状一致 */
 export interface Counts {
   withPunctuation: number
@@ -207,16 +182,73 @@ export interface Counts {
 
 export const ZERO_COUNTS: Counts = { withPunctuation: 0, withoutPunctuation: 0 }
 
+/** 光标这会儿在哪一半 */
+export type FocusedPane = 'left' | 'right'
+
 /**
- * 两边合计。
+ * 右半边有没有**自己独立的一份字数**。
  *
- * @param left  左边这一半的字数
- * @param right 右边那一半的字数。还没读到就传 null
+ * `shared` 没有 —— 那时候左右是同一份文档的两个视图，
+ * 右边显示的每一个字都已经在左边那个数里了。
  */
-export function totalCounts(left: Counts, right: Counts | null, mode: PaneMode): Counts {
-  if (!right || !rightCounts(mode)) return left
-  return {
-    withPunctuation: left.withPunctuation + right.withPunctuation,
-    withoutPunctuation: left.withoutPunctuation + right.withoutPunctuation,
-  }
+export function rightCounts(mode: PaneMode): boolean {
+  return mode === 'own' || mode === 'scratch' || mode === 'ref'
+}
+
+/**
+ * 顶栏那个字数，数的是**哪一半**。
+ *
+ * ─────────────────────────────────────────────────────────────
+ * 作者定的（preview.1 之后改的）：**光标在哪一篇就数哪一篇。**
+ *
+ * 上一版是「两边合计」，理由是「合计是个稳定的数」。那个理由说反了 ——
+ * 它稳定，但**它不回答任何问题**。作者盯着这个数是为了知道
+ * 「我正在写的这一章写了多少」；右边摆着一份两千字的参考资料时，
+ * 这个数就凭空多了两千，而那两千不是他写的、也不会随他写而动。
+ * 一个「今天这章到三千了没有」都答不上来的字数，稳定也没用。
+ *
+ * 跟着光标走的代价是数字会跳（点左边一个数、点右边另一个数），
+ * 但那一跳是**有意义**的：它跟着「我这会儿在写哪一篇」变，
+ * 而那正是作者要问的那件事。旁边写着数的是哪一篇，跳也不会误读。
+ *
+ * ⚠️ `shared` 永远算左边。那时候两边是同一份文档的两个视图，
+ * 光标在右边，数的还是同一章 —— 不是「另一篇」。
+ * ─────────────────────────────────────────────────────────────
+ */
+export function countsSide(mode: PaneMode, focused: FocusedPane): FocusedPane {
+  if (focused !== 'right') return 'left'
+  return rightCounts(mode) ? 'right' : 'left'
+}
+
+/**
+ * 这个数旁边写什么 —— **必须写，不能光摆个数字。**
+ *
+ * 一个会跟着光标变的数，不说清楚它数的是哪一篇，
+ * 作者只会看见「字数自己乱跳」。
+ */
+export function countsName(mode: PaneMode, focused: FocusedPane): string {
+  return countsSide(mode, focused) === 'right' ? '右边' : '本章'
+}
+
+/**
+ * 顶栏那个字数到底显示哪个。
+ *
+ * @param left    左边这一半的字数
+ * @param right   右边那一半的字数。还没读到就传 null
+ * @param focused 光标这会儿在哪一半
+ */
+export function shownCounts(
+  left: Counts,
+  right: Counts | null,
+  mode: PaneMode,
+  focused: FocusedPane,
+): Counts {
+  if (countsSide(mode, focused) !== 'right') return left
+  /*
+   * 右边还没读回来（null）就先报左边的。
+   *
+   * 报 0 的话，点到右边那一瞬会先闪一个 0 再跳到真数 ——
+   * 而 0 这个数在字数这件事上看着就像「稿子没了」。
+   */
+  return right ?? left
 }

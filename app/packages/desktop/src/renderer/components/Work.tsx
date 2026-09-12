@@ -37,6 +37,7 @@ import { ConflictOverlay } from './ConflictOverlay.js'
 import { VersionClash } from './VersionClash.js'
 import { QuickJump } from './QuickJump.js'
 import { SidePane } from './SidePane.js'
+import { SplitDrop } from './SplitDrop.js'
 import { DocLink } from '../pane-link.js'
 import {
   DEFAULT_RATIO,
@@ -45,8 +46,11 @@ import {
   needsLink,
   paneMode,
   ratioFromDrag,
+  countsName,
+  countsSide,
   rightCounts,
-  totalCounts,
+  shownCounts,
+  type FocusedPane,
 } from '../split.js'
 import { LinksPanel } from './LinksPanel.js'
 import { TrashPanel } from './TrashPanel.js'
@@ -115,6 +119,15 @@ type Dialog =
   | { kind: 'linkMissing'; target: string }
   | { kind: 'newGameScript'; dir: string }
   | { kind: 'newScript'; dir: string }
+  /**
+   * 从侧边栏那个虚线框新建的一篇空白稿，建完直接摆到右半边。
+   *
+   * 跟 `newChapter` 分开是因为**建完之后去哪儿**不一样：那一条建完就打开
+   * （左边换成新的一篇），这一条建完摆到**右边**、左边一动不动 ——
+   * 作者点它是为了「一边看着现在这篇，一边在旁边起个新的」，
+   * 把他正在写的那一篇顶掉就正好毁了这件事。
+   */
+  | { kind: 'newSplitDoc'; dir: string }
   | null
 
 export interface WorkProps {
@@ -773,9 +786,15 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
    *
    * 不用透明触发区 div —— 那玩意儿会挡住底下的点击，而且 10px 太窄，
    * 作者反馈「以为该触发但就是触发不了」。用鼠标位置判定既宽松又不挡点击。
+   *
+   * ⚠️ 参数写成「有个 clientX 就行」，是因为它同时接 mousemove 和 dragover ——
+   * **拖拽期间浏览器一个 mouse 事件都不发。** 只接 mousemove 的话，
+   * 作者从目录里拖一章去左边那个虚线框，一路上什么都不会发生：
+   * 那个框压根没滑出来，他拖着一章悬在空中，无处可放。
+   * 而这正是双屏新入口最主要的用法。
    */
   const onWorkMouseMove = useCallback(
-    (e: React.MouseEvent) => {
+    (e: { clientX: number }) => {
       const left = swapped ? dirBar : toolBar
       const right = swapped ? toolBar : dirBar
       const w = window.innerWidth
@@ -851,6 +870,26 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
   const [rightBody, setRightBody] = useState('')
 
   /**
+   * 光标这会儿在哪一半。**顶栏那个字数就数这一半的那一篇。**
+   *
+   * ⚠️ 只在**拿到**焦点时改，丢焦点时不改。
+   * 点到侧边栏、点到顶栏的那一刻两半都没有焦点 —— 那时候把它退回左边，
+   * 字数就会在作者点侧边栏的一瞬间自己跳一下，而他什么都没做。
+   * 「光标所在的那一篇」在这种时候的正确答案是「刚才那一篇」。
+   */
+  const [focusedPane, setFocusedPane] = useState<FocusedPane>('left')
+
+  /*
+   * 右半边关掉、或者换成跟左边同一篇之后，焦点得回左边。
+   *
+   * 不收这一脚的话，「右边」这个状态会挂在一个已经不存在的半边上，
+   * 顶栏于是一直写着「右边」，而右边根本没了。
+   */
+  useEffect(() => {
+    if (countsSide(splitMode, 'right') !== 'right') setFocusedPane('left')
+  }, [splitMode])
+
+  /**
    * 把一张便利贴贴到落点上。
    *
    * ─────────────────────────────────────────────────────────────
@@ -881,18 +920,19 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
     [rightBody, splitMode],
   )
   /**
-   * 顶栏那个字数：**两边合计**（作者定的）。
+   * 顶栏那个字数：**光标在哪一篇就数哪一篇**（作者定的，规矩在 split.ts）。
    *
-   * 备选是「以有焦点的那一半为准」，那条的毛病当场就看得见 ——
-   * 数字跟着点哪儿变，同一份活两个数交替闪。合计是个稳定的数。
-   *
-   * `totalCounts` 里管着那条例外：同一份文档的两个视图只算一遍。
+   * 原来是两边合计。合计确实稳定，但它不回答任何问题 ——
+   * 右边摆着一份两千字的参考资料时，这个数就凭空多两千，
+   * 而「这一章写到三千了没有」正是作者盯着它要问的那件事。
    */
   const counts = useMemo(
-    () => totalCounts(leftCounts, rightSideCounts, splitMode),
-    [leftCounts, rightSideCounts, splitMode],
+    () => shownCounts(leftCounts, rightSideCounts, splitMode, focusedPane),
+    [leftCounts, rightSideCounts, splitMode, focusedPane],
   )
-  const countsSplit = rightSideCounts !== null
+  /** 这个数数的是哪一篇，写在数字旁边 —— 一个会跟着光标变的数不说清楚就成了「乱跳」 */
+  const countsLabel = countsName(splitMode, focusedPane)
+  const countsOnRight = countsSide(splitMode, focusedPane) === 'right'
   const chapters = useMemo(() => (tree ? flattenChapters(tree.text) : []), [tree])
 
   /**
@@ -1036,6 +1076,15 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
           flash('骨架建好了。「角色名：台词」这样写就会被认出来。')
           break
         }
+        case 'newSplitDoc': {
+          const { path } = await api.createChapter(d.dir, value!)
+          // 不传 openPath —— 左边保持不动，新的那篇摆到**右边**去。
+          // 见 Dialog 里 newSplitDoc 上那段注释
+          await refreshTree()
+          onSettingsChange({ splitOn: true, splitRight: { kind: 'doc', path } })
+          flash('新的那篇摆在右边了，左边这篇一个字没动。')
+          break
+        }
         case 'newGameScript': {
           // 骨架本身是跑得通的：有分支、有变量、有条件、有合并、有结局，
           // 而且体检不报任何问题 —— 给作者一份自带断头路的模板等于教他写错。
@@ -1131,6 +1180,81 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
     }
   }
 
+  /*
+   * ── 把东西摆到右半边 ────────────────────────────────────
+   *
+   * 现在有三个入口通向同一件事（侧边栏那个虚线框、顶栏的「双屏」按钮、
+   * 右半边自己的「换」），所以动作只写一遍。各写一遍的话，
+   * 迟早有一处漏掉 `splitOn: true` —— 表现是「拖进去了，可双屏没开」，
+   * 而那看着就像拖放失败。
+   */
+
+  /** 把书里的一篇摆到右半边 */
+  const openRight = useCallback(
+    (path: string) => {
+      onSettingsChange({ splitOn: true, splitRight: { kind: 'doc', path } })
+    },
+    [onSettingsChange],
+  )
+
+  /** 把一个书外的文件摆到右半边（只读，见 §1.5） */
+  const putFileOnRight = useCallback(
+    (p: string) => {
+      /*
+       * 拖进来之前先读一遍。
+       *
+       * 读不了的话（太大、不是文本、编码不对）当场说清楚 ——
+       * 而不是先把它设成右半边、再让右半边显示一行错误。
+       * 后者会把原来摆着的那份参考挤掉，换来一句报错。
+       */
+      void api
+        .readAnyText(p)
+        .then(() => {
+          onSettingsChange({ splitOn: true, splitRight: { kind: 'file', path: p } })
+        })
+        .catch((e: unknown) => {
+          flash(e instanceof Error ? e.message : String(e))
+        })
+    },
+    [onSettingsChange, flash],
+  )
+
+  /** 拖进来的东西没有硬盘路径（目录、网页里的选区）。说一声，别让人以为软件没反应 */
+  const dropUnsupported = useCallback(
+    () => flash('这个拖不进来 —— 只能拖单个文本文件，目录和网页里的选区都不行。'),
+    [flash],
+  )
+
+  /** 右边摆一张临时文档（便笺）。它存在配置里，不在书里多出一个文件 */
+  const openScratch = useCallback(() => {
+    const had = (settings.splitScratch ?? '').trim() !== ''
+    onSettingsChange({ splitOn: true, splitRight: { kind: 'scratch', path: '' } })
+    // 只在**空白的**那一张上说一次。上次那张还在的时候他早就知道这是什么了
+    if (!had) flash('右边这张是临时的 —— 存在设置里，你的书里不会多出一篇。')
+  }, [settings.splitScratch, onSettingsChange, flash])
+
+  /**
+   * 侧边栏最上面那个虚线框。**双屏的主入口**（更新文档/11-0.5规划.md §1.6）。
+   *
+   * 两个侧边栏都放不合适（一个界面上两个投放区，作者得先想「往哪个拖」），
+   * 所以只挂在功能栏这一侧，摆在最上面 —— 它是「这块屏怎么摆」，
+   * 比底下任何一个面板都更靠上一层。
+   */
+  const splitDrop = (
+    <SplitDrop
+      mode={splitMode}
+      rightTitle={rightTitle}
+      hasScratch={(settings.splitScratch ?? '').trim() !== ''}
+      onPickDoc={openRight}
+      onDropFile={putFileOnRight}
+      onDropUnsupported={dropUnsupported}
+      onNewBlank={() => setDialog({ kind: 'newSplitDoc', dir: `${book.rootPath}/正文` })}
+      onScratch={openScratch}
+      onChooseChapter={() => setPickingRight(true)}
+      onClose={() => onSettingsChange({ splitOn: false })}
+    />
+  )
+
   // ── 两个侧边栏（可互换） ──
 
   const directoryPanel = (
@@ -1178,6 +1302,7 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
       width={settings.toolBarWidth}
       onResize={(px) => onSettingsChange({ toolBarWidth: px })}
     >
+      {splitDrop}
       <div className="panel-list">
         {tools.map((t) => (
           <button
@@ -1200,7 +1325,7 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
             bookPath={book.rootPath}
             today={today}
             counts={counts}
-            countsSplit={countsSplit}
+            countsLabel={countsLabel}
             bookTitle={book.meta.title}
             refreshKey={savedTick}
             onOpenFull={() => setShowStats(true)}
@@ -1450,13 +1575,19 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
               {pomo.phase === 'focus' ? '专注' : '休息'} {fmtClock(pomo.remaining)}
             </span>
           )}
+          {/*
+            字数。**开着双屏时旁边挂一个「本章 / 右边」的小标**——
+            这个数跟着光标走，不写出来数的是哪一篇的话，
+            作者看见的就只是「字数自己在跳」。
+          */}
           <span
             title={
-              rightSideCounts
-                ? `两边合计（含标点）：左 ${formatCount(leftCounts.withPunctuation)} + 右 ${formatCount(rightSideCounts.withPunctuation)}`
-                : '本章字数（含标点）'
+              splitMode === 'off'
+                ? '本章字数（含标点）'
+                : `光标在哪一篇就数哪一篇。现在数的是${countsOnRight ? `右边的「${rightTitle || '那一篇'}」` : `左边的「${meta?.title ?? '本章'}」`}（含标点）`
             }
           >
+            {splitMode !== 'off' && <span className="topbar-side">{countsLabel}</span>}
             {formatCount(counts.withPunctuation)} 字
           </span>
           <span
@@ -1530,6 +1661,12 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
         ref={workBodyRef}
         style={splitMode === 'off' ? undefined : ({ ['--split-ratio' as string]: String(ratio) } as React.CSSProperties)}
         onMouseMove={onWorkMouseMove}
+        /*
+         * 拖着东西经过时同样要唤出侧边栏 —— 见 onWorkMouseMove 上那段。
+         * **绝不 preventDefault**：那等于宣布「整块写作区都能放」，
+         * 于是往稿纸上一松手，Chromium 就把窗口导航到那个文件去。
+         */
+        onDragOver={onWorkMouseMove}
       >
         {swapped ? directoryPanel : toolPanel}
 
@@ -1554,6 +1691,8 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
               onChange={onChange}
               onSaveRequest={() => void doSave(true)}
               onCaretMove={setCaret}
+              // 光标回到左边了 —— 顶栏那个字数跟着数左边这一篇
+              onFocus={() => setFocusedPane('left')}
               onEdit={(a, r) => setSession((c) => addEdit(c, a, r))}
               onSelectionChange={(r) => {
                 setSelection(r)
@@ -1616,6 +1755,8 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
               onEdit={(a, r) => setSession((c) => addEdit(c, a, r))}
               // 贴在右半边的便利贴也要给光标让路，所以右边的光标位置也得报上来
               onCaretMove={setCaret}
+              // 光标挪到右边了 —— 顶栏那个字数跟着数右边这一篇
+              onFocus={() => setFocusedPane('right')}
               onStickyDrop={dropSticky}
               onPickDoc={() => setPickingRight(true)}
               onClose={() => onSettingsChange({ splitOn: false })}
@@ -1629,24 +1770,9 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
                   splitScratch: t,
                 })
               }}
-              onDropUnsupported={() => flash('这个拖不进来 —— 只能拖单个文本文件，目录和网页里的选区都不行。')}
-              onDropFile={(p) => {
-                /*
-                 * 拖进来之前先读一遍。
-                 *
-                 * 读不了的话（太大、不是文本、编码不对）当场说清楚 ——
-                 * 而不是先把它设成右半边、再让右半边显示一行错误。
-                 * 后者会把原来摆着的那份参考挤掉，换来一句报错。
-                 */
-                void api
-                  .readAnyText(p)
-                  .then(() => {
-                    onSettingsChange({ splitOn: true, splitRight: { kind: 'file', path: p } })
-                  })
-                  .catch((e: unknown) => {
-                    flash(e instanceof Error ? e.message : String(e))
-                  })
-              }}
+              // 拖进虚线框和拖进右半边是同一件事，动作只写一遍（见 putFileOnRight）
+              onDropUnsupported={dropUnsupported}
+              onDropFile={putFileOnRight}
             />
           </>
         )}
@@ -1691,7 +1817,7 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
         <QuickJump
           tree={tree}
           onPick={(p) => {
-            onSettingsChange({ splitOn: true, splitRight: { kind: 'doc', path: p } })
+            openRight(p)
             setPickingRight(false)
           }}
           onClose={() => setPickingRight(false)}
@@ -1786,6 +1912,17 @@ function renderDialog(
           title="新建游戏剧本"
           hint="会给一份带分支、变量、条件、结局的骨架，照着改就行。"
           placeholder="第一幕"
+          confirmText="创建"
+          onConfirm={run}
+          onCancel={cancel}
+        />
+      )
+    case 'newSplitDoc':
+      return (
+        <PromptModal
+          title="在右边新建一篇空白文档"
+          hint="它是书里真真正正的一篇 —— 进目录、算字数、能导出。建好之后直接摆到右半边，左边这篇一个字不动。只想随手记点什么、不想在书里多出一篇的话，用「新建临时文档」。"
+          placeholder="标题，如「第三章 转折」"
           confirmText="创建"
           onConfirm={run}
           onCancel={cancel}
@@ -1949,7 +2086,7 @@ function StatsPanel({
   bookPath,
   today,
   counts,
-  countsSplit,
+  countsLabel,
   bookTitle,
   refreshKey,
   onOpenFull,
@@ -1958,7 +2095,8 @@ function StatsPanel({
   today: TodayProgress | null
   counts: { withPunctuation: number; withoutPunctuation: number }
   /** 这两个数是不是左右合计的。是的话标题不能再写「本章」 */
-  countsSplit: boolean
+  /** 这两个数数的是哪一篇（「本章」/「右边」）。见 split.ts 的 countsName */
+  countsLabel: string
   bookTitle: string
   refreshKey: number
   onOpenFull(): void
@@ -2014,16 +2152,16 @@ function StatsPanel({
           </b>
         </div>
         {/*
-          开着双屏时这两个数是**两边合计**的，那就不能再叫「本章」——
-          一个写着「本章」的数其实含着右半边那一篇，作者会拿它当本章字数用，
-          然后发现怎么导出来的少了一截。
+          这两个数跟顶栏那个是同一个：**光标在哪一篇就数哪一篇**。
+          所以名字也跟着变 —— 一个写着「本章」的数其实在数右边那一篇，
+          作者会拿它当本章字数用，然后发现导出来的对不上。
         */}
         <div className="stat-row">
-          <span>{countsSplit ? '两边 · 含标点' : '本章 · 含标点'}</span>
+          <span>{countsLabel} · 含标点</span>
           <b>{formatCount(counts.withPunctuation)}</b>
         </div>
         <div className="stat-row">
-          <span>{countsSplit ? '两边 · 不含标点' : '本章 · 不含标点'}</span>
+          <span>{countsLabel} · 不含标点</span>
           <b>{formatCount(counts.withoutPunctuation)}</b>
         </div>
       </div>

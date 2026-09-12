@@ -69,6 +69,13 @@ export interface SidePaneProps {
   /** 右边的光标在屏幕哪儿 —— 便利贴靠它让路 */
   onCaretMove(pos: { x: number; y: number } | null): void
   /**
+   * 光标挪到右半边来了。
+   *
+   * 顶栏那个字数数的是**有光标的那一篇**（作者定的，见 split.ts 的
+   * `countsSide`），所以这一半拿到焦点是件要往外说的事。
+   */
+  onFocus(): void
+  /**
    * 往右半边拖了一张便利贴。
    *
    * 便利贴贴在**鼠标放开的地方**，左右两边一视同仁 ——
@@ -388,6 +395,7 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
               onChange={onChange}
               onEdit={props.onEdit}
               onCaretMove={props.onCaretMove}
+              onFocus={props.onFocus}
               onSaveRequest={() => void flush()}
               writing={props.writing}
               script={props.script}

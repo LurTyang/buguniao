@@ -292,6 +292,16 @@ export interface EditorProps {
   onWikiLink?(target: string): void
   /** 光标屏幕坐标变化。便利贴靠它避让 */
   onCaretMove?(pos: { x: number; y: number } | null): void
+  /**
+   * 这块稿纸拿到焦点了。
+   *
+   * 双屏之后「光标在哪一半」是个要显示出来的事实 ——
+   * 顶栏那个字数数的就是有光标的那一篇（split.ts 的 `countsSide`）。
+   * 只在**拿到**焦点时叫一声，丢焦点不叫：点到侧边栏、点到顶栏时
+   * 两半都没有焦点，那时候把字数清成 0 或者跳回左边都是错的 ——
+   * 作者的注意力还在他刚才写的那一篇上。
+   */
+  onFocus?(): void
   /** 选区变化。伏笔面板靠它决定「标为埋点」能不能点 */
   onSelectionChange?(range: { start: number; end: number } | null): void
   /**
@@ -393,6 +403,7 @@ export function Editor({
   onSaveRequest,
   onWikiLink,
   onCaretMove,
+  onFocus,
   onSelectionChange,
   onEdit,
   externalRevision = 0,
@@ -436,6 +447,7 @@ export function Editor({
     onSaveRequest,
     onWikiLink,
     onCaretMove,
+    onFocus,
     onSelectionChange,
     onEdit,
     onContextMenu,
@@ -445,6 +457,7 @@ export function Editor({
     onSaveRequest,
     onWikiLink,
     onCaretMove,
+    onFocus,
     onSelectionChange,
     onEdit,
     onContextMenu,
@@ -520,6 +533,8 @@ export function Editor({
           }
           if (added > 0 || removed > 0) cbRef.current.onEdit(added, removed)
         }
+        // 焦点挪到这块稿纸上了。丢焦点不报 —— 理由见 onFocus 那条注释
+        if (u.focusChanged && u.view.hasFocus) cbRef.current.onFocus?.()
         if (u.docChanged || u.selectionSet || u.geometryChanged) reportCaret(u.view)
         if (u.docChanged || u.selectionSet) {
           const sel = u.state.selection.main

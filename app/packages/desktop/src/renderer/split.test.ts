@@ -21,7 +21,9 @@ import {
   rightPersistsScratch,
   rightSaves,
   safeToSave,
-  totalCounts,
+  countsName,
+  countsSide,
+  shownCounts,
   ZERO_COUNTS,
   type Counts,
   type RightSide,
@@ -204,38 +206,64 @@ describe('左边换文档时右边不跟', () => {
   })
 })
 
-describe('字数：两边合计', () => {
+describe('字数：光标在哪一篇就数哪一篇', () => {
   const c = (w: number, n: number): Counts => ({ withPunctuation: w, withoutPunctuation: n })
+  const L = c(3200, 2800)
+  const R = c(800, 700)
 
-  it('没开双屏时右边不算 —— 根本没有右边', () => {
+  it('没开双屏时右边没有自己的字数 —— 根本没有右边', () => {
     expect(rightCounts('off')).toBe(false)
     expect(rightCounts('empty')).toBe(false)
   })
 
-  it('右边是另一篇、是便笺、是书外参考，都算', () => {
+  it('右边是另一篇、是便笺、是书外参考，各有各的一份字数', () => {
     expect(rightCounts('own')).toBe(true)
     expect(rightCounts('scratch')).toBe(true)
     expect(rightCounts('ref')).toBe(true)
   })
 
-  it('⚠️ 同一份文档的两个视图只能算一遍', () => {
-    // 一章三千字，两边一加就是六千 —— 那不是合计，是把同一份稿子数了两遍。
-    // 而且它偏偏在最有用的那种摆法（对着开头改结尾）上出错
-    expect(rightCounts('shared')).toBe(false)
-    expect(totalCounts(c(3000, 2600), c(3000, 2600), 'shared')).toEqual(c(3000, 2600))
+  it('光标在左边就数左边', () => {
+    expect(countsSide('own', 'left')).toBe('left')
+    expect(shownCounts(L, R, 'own', 'left')).toEqual(L)
   })
 
-  it('两边都有字就加起来', () => {
-    expect(totalCounts(c(3200, 2800), c(800, 700), 'own')).toEqual(c(4000, 3500))
+  it('【关键】光标在右边就数右边 —— 不再是两边合计', () => {
+    // 合计的毛病：右边摆一份两千字的参考，这个数就凭空多两千，
+    // 而「这一章写到三千了没有」正是作者盯着它要问的那件事
+    expect(countsSide('own', 'right')).toBe('right')
+    expect(shownCounts(L, R, 'own', 'right')).toEqual(R)
+    expect(shownCounts(L, R, 'ref', 'right')).toEqual(R)
+    expect(shownCounts(L, R, 'scratch', 'right')).toEqual(R)
   })
 
-  it('右边还没读到（null）就只报左边，不报 0', () => {
-    // 读盘是异步的。这一小段时间里把右边当成 0 加进去，
-    // 数字会先跳一下再跳回来 —— 看着像字丢了
-    expect(totalCounts(c(3200, 2800), null, 'own')).toEqual(c(3200, 2800))
+  it('⚠️ 同一份文档的两个视图：光标在哪边都数同一篇', () => {
+    // 左右是同一章的两个视图，光标挪到右边并没有换一篇 ——
+    // 这时候报「右边」既是错的，也会让那一章的字数看着像变了
+    expect(countsSide('shared', 'right')).toBe('left')
+    expect(shownCounts(L, c(3200, 2800), 'shared', 'right')).toEqual(L)
+    expect(countsName('shared', 'right')).toBe('本章')
   })
 
-  it('空的右半边加了等于没加', () => {
-    expect(totalCounts(c(3200, 2800), ZERO_COUNTS, 'own')).toEqual(c(3200, 2800))
+  it('右边还没读到（null）就先报左边，不报 0', () => {
+    // 读盘是异步的。报 0 的话，点到右边那一瞬会先闪一个 0 再跳到真数 ——
+    // 而 0 这个数在字数这件事上看着就像「稿子没了」
+    expect(shownCounts(L, null, 'own', 'right')).toEqual(L)
+  })
+
+  it('右边空着（0 字）就老实报 0 —— 那是真的 0', () => {
+    expect(shownCounts(L, ZERO_COUNTS, 'own', 'right')).toEqual(ZERO_COUNTS)
+  })
+
+  it('数字旁边写着数的是哪一篇 —— 不写的话它看着就是在乱跳', () => {
+    expect(countsName('off', 'left')).toBe('本章')
+    expect(countsName('own', 'left')).toBe('本章')
+    expect(countsName('own', 'right')).toBe('右边')
+    expect(countsName('ref', 'right')).toBe('右边')
+  })
+
+  it('右半边关掉之后，「在右边」这个状态不该还能生效', () => {
+    // 界面那边靠这一条把焦点收回左边（splitMode 变了就重置）
+    expect(countsSide('off', 'right')).toBe('left')
+    expect(countsSide('empty', 'right')).toBe('left')
   })
 })

@@ -1207,6 +1207,9 @@ export function runSmoke(win: BrowserWindow, tempRoot: string): void {
                 // 双屏：右边摆同一篇 —— 那正是「一份文档两个视图」那条路
                 await window.bugu.updateSettings({ splitOn: true, splitRight: { kind: 'doc', path: ch.path } })
                 await window.bugu.updateSettings({ focusMode: true })
+                // 双屏那个虚线框长在功能栏里，不钉住的话它压根不在 DOM 上，
+                // 下面那一步只会得到「no-box」——那是环境，不是产品
+                await window.bugu.updateSettings({ toolBarPinned: true })
                 return 'ok'
               } catch (e) { return 'err: ' + String((e && e.message) || e) }
             })()`
@@ -1254,6 +1257,7 @@ export function runSmoke(win: BrowserWindow, tempRoot: string): void {
               focusBits: string
               splitBits: string
               writeBits: string
+              dropBits: string
             }
             steps.push({ name: '【关键】点开一本书之后稿纸不是白的', ok: opened.ok, detail: opened.detail })
             /*
@@ -1362,6 +1366,56 @@ export function runSmoke(win: BrowserWindow, tempRoot: string): void {
               detail: opened.splitBits,
             })
 
+            /*
+             * 侧边栏那个虚线框（0.5，更新文档/11-0.5规划.md §1.6）。
+             *
+             * 作者说原来开双屏「过于难用」，新入口就是这一块 ——
+             * 所以它必须真的接得住拖过来的一篇，而不是看着像个投放区。
+             */
+            let drop: {
+              title?: string
+              panes?: number
+              head?: string
+              onRight?: string
+              onLeft?: string
+            } = {}
+            try {
+              drop = JSON.parse(opened.dropBits) as typeof drop
+            } catch {
+              drop = {}
+            }
+            steps.push({
+              name: '【关键】往侧边栏那个虚线框里拖一篇，右半边就换成它',
+              ok: (drop.title ?? '').includes('拖进来的那一篇'),
+              detail: opened.dropBits,
+            })
+            steps.push({
+              name: '拖进来的是另一篇，「同一篇」那个标记跟着消失',
+              ok: drop.panes === 2 && !(drop.head ?? '').includes('同一篇'),
+              detail: opened.dropBits,
+            })
+
+            /*
+             * 字数跟着光标走（作者定的，preview.1 之后改的规矩）。
+             *
+             * 右边是刚建的空白一篇，左边是六十行 —— 所以点右边该看见
+             * 「右边 0 字」，点回左边该看见「本章 一千多字」。
+             * 两条一起验，只验一条的话「数字压根不动」也能过其中一条。
+             */
+            steps.push({
+              name: '【关键】光标在右边时，顶栏数的是右边那一篇',
+              ok: (drop.onRight ?? '').includes('右边') && /右边\s*0 字/.test(drop.onRight ?? ''),
+              detail: drop.onRight ?? opened.dropBits,
+            })
+            steps.push({
+              name: '【关键】光标回左边，数的就回到本章',
+              ok:
+                (drop.onLeft ?? '').includes('本章') &&
+                !(drop.onLeft ?? '').includes('右边') &&
+                (drop.onLeft ?? '') !== (drop.onRight ?? ''),
+              detail: drop.onLeft ?? opened.dropBits,
+            })
+
             for (const s of steps) {
               if (!s.ok) problems.push(`步骤失败「${s.name}」${s.detail ? ' —— ' + s.detail : ''}`)
             }
@@ -1396,7 +1450,7 @@ const OPEN_BOOK_SCRIPT = `(async () => {
 
     const cards = Array.from(document.querySelectorAll('.book-card'))
       .filter(function (el) { return el.className.indexOf('idea-card') < 0 })
-    if (cards.length === 0) return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', detail: '书架上一本书都没有，点不进去' }
+    if (cards.length === 0) return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', dropBits: '', detail: '书架上一本书都没有，点不进去' }
 
     cards[0].click()
     for (var i = 0; i < 40; i++) {
@@ -1405,7 +1459,7 @@ const OPEN_BOOK_SCRIPT = `(async () => {
     }
     await sleep(500)
 
-    if (!has('.work')) return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', detail: '点了之后没有 .work' }
+    if (!has('.work')) return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', dropBits: '', detail: '点了之后没有 .work' }
 
     // 目录树里点开第一篇 —— 进书之后默认可能没打开任何文档
     var docs = Array.from(document.querySelectorAll('.tree-chapter, .tree-item'))
@@ -1439,10 +1493,10 @@ const OPEN_BOOK_SCRIPT = `(async () => {
     var cmText = cm ? (cm.innerText || '').replace(/\s+/g, '') : ''
 
     if (!bits.editor) {
-      return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', detail: '稿纸里没有编辑器：' + JSON.stringify(bits) }
+      return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', dropBits: '', detail: '稿纸里没有编辑器：' + JSON.stringify(bits) }
     }
     if (cmText.length === 0) {
-      return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', detail: '编辑器在但一个字都没有：' + JSON.stringify(bits) }
+      return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', dropBits: '', detail: '编辑器在但一个字都没有：' + JSON.stringify(bits) }
     }
     /*
      * 实地验一次「翻译出来的选择器到底命不命中」。
@@ -1588,17 +1642,73 @@ const OPEN_BOOK_SCRIPT = `(async () => {
     })
     probe.remove()
 
+    /*
+     * 【双屏的新入口】侧边栏最上面那个虚线框，拖一篇进去就摆到右半边。
+     *
+     * 这一步放在最后，因为它会**换掉右半边摆的是哪一篇** ——
+     * 上面那几条（同一份文档两个视图、滚动不同步）靠的正是原来那一篇。
+     *
+     * 为什么非得在真界面上验：这条路上每一环坏了都**不报错**，
+     * 只是「拖过去松手没反应」——
+     *   · 目录树那边 effectAllowed 少写一半 → drop 根本不触发
+     *   · 通道类型对不上   → 框判成「不接」，dragover 不放行
+     *   · 落点没接 onDrop   → 浏览器执行默认行为，窗口被文件顶掉
+     * 三种表现一模一样，而单元测试只够到第一环。
+     */
+    var dropBits = 'no-box'
+    var box = document.querySelector('.split-drop')
+    if (box) {
+      var bs2 = await window.bugu.listBooks()
+      var b2 = bs2[0]
+      var root2 = b2.rootPath || b2.path
+      var made = await window.bugu.createChapter(root2 + '/正文', '拖进来的那一篇')
+      var dt = new DataTransfer()
+      dt.setData('application/x-bugu-doc', made.path)
+      var opts = { bubbles: true, cancelable: true, dataTransfer: dt }
+      box.dispatchEvent(new DragEvent('dragover', opts))
+      box.dispatchEvent(new DragEvent('drop', opts))
+      await sleep(900)
+      /*
+       * 顺手把**字数跟着光标走**也量了（作者定的，见 §1.4）。
+       *
+       * 这会儿右边摆的是刚建的空白一篇，左边是六十行 ——
+       * 两个数差得足够远，谁也糊弄不了谁。
+       * 这条只有在真界面上验得了：它靠的是 CodeMirror 的 focusChanged，
+       * 而那玩意儿不发的时候不报错，表现是「数字纹丝不动」。
+       */
+      var topbar = function () {
+        return ((document.querySelector('.topbar-right') || {}).innerText || '').replace(/\s+/g, ' ')
+      }
+      var rightCm = document.querySelector('.side-pane .cm-content')
+      if (rightCm) { rightCm.focus(); await sleep(500) }
+      var onRight = topbar()
+      var leftCm = document.querySelector('.paper .cm-content')
+      if (leftCm) { leftCm.focus(); await sleep(500) }
+      var onLeft = topbar()
+
+      dropBits = JSON.stringify({
+        title: ((document.querySelector('.side-title') || {}).innerText || '').trim(),
+        panes: document.querySelectorAll('.cm-editor').length,
+        onRight: onRight,
+        onLeft: onLeft,
+        // 换成另一篇之后就不再是「同一份文档的两个视图」了，
+        // 那个「同一篇」的标记必须跟着消失 —— 它还在的话说明右半边没真的换
+        head: ((document.querySelector('.side-head') || {}).innerText || '').replace(/\s+/g, ' '),
+      })
+    }
+
     return {
       ok: true,
       bridgeHit: hit,
       focusBits: focusBits,
       splitBits: splitBits,
       writeBits: writeBits,
+      dropBits: dropBits,
       classed: bits.classed,
       detail: '正文 ' + cmText.length + ' 个字，' + JSON.stringify(bits),
     }
   } catch (e) {
-    return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', detail: '点开时抛了：' + String((e && e.message) || e) }
+    return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', dropBits: '', detail: '点开时抛了：' + String((e && e.message) || e) }
   }
 })()`
 

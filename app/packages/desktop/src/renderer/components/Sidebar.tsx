@@ -37,8 +37,21 @@ export interface SidebarState {
   reveal(): void
   /** 鼠标离开时调用 */
   scheduleHide(): void
-  /** 绑到侧边栏本体，鼠标在面板里时不收起 */
-  panelProps: { onMouseEnter(): void; onMouseLeave(): void }
+  /**
+   * 绑到侧边栏本体，鼠标在面板里时不收起。
+   *
+   * ⚠️ **拖拽期间浏览器不发 mouse 事件**，只发 drag 事件 ——
+   * 少了那两个 drag 回调的话，作者从目录里拖一章往这边的虚线框走，
+   * 走到一半这个没钉住的面板自己收起来了，落点当场消失。
+   * 只接 enter/over 不接 leave：拖到框里那两行字上时也会触发一次
+   * dragleave，接了它就会在最不该收的时候收。
+   */
+  panelProps: {
+    onMouseEnter(): void
+    onMouseLeave(): void
+    onDragEnter(): void
+    onDragOver(): void
+  }
   /** 开始连续输入时调用，立刻收起未钉住的面板 */
   hideNow(): void
 }
@@ -111,7 +124,12 @@ export function useSidebar(
       }),
     reveal,
     scheduleHide,
-    panelProps: { onMouseEnter: cancelHide, onMouseLeave: scheduleHide },
+    panelProps: {
+      onMouseEnter: cancelHide,
+      onMouseLeave: scheduleHide,
+      onDragEnter: cancelHide,
+      onDragOver: cancelHide,
+    },
     hideNow,
   }
 }

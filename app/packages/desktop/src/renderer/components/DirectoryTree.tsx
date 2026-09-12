@@ -12,6 +12,7 @@ import { useState, type DragEvent } from 'react'
 import type { BookTree, ChapterNode, TextNode, VolumeNode } from '@bugu/core'
 import type { MenuItem } from './ContextMenu.js'
 import { startStickyDrag } from '../sticky-drag.js'
+import { startDocDrag, startRowDrag } from '../doc-drag.js'
 
 export interface TreeActions {
   open(path: string): void
@@ -51,12 +52,24 @@ export function TextTree({
   const [over, setOver] = useState<string | null>(null)
   const textDir = `${tree.rootPath}/正文`
 
-  const dragProps = (dir: string, index: number, key: string) => ({
+  /**
+   * @param doc 这一行是不是一篇能打开的文档。卷是 false ——
+   *   它只能在目录里排序，不能被拖进双屏那个虚线框（见 doc-drag.ts）
+   */
+  const dragProps = (dir: string, index: number, key: string, doc: boolean) => ({
     draggable: true,
     onDragStart: (e: DragEvent) => {
-      e.dataTransfer.effectAllowed = 'move'
-      // Firefox 要求必须 setData 才会真的开始拖
-      e.dataTransfer.setData('text/plain', key)
+      /*
+       * ⚠️ **从前这儿放的是 `text/plain`（内容是这一章的路径）。**
+       *
+       * 稿纸里坐着一个 CodeMirror，它认 text/plain —— 于是把一章从目录里
+       * 拖到稿纸上，`正文/第三章.md` 这一串就被当成正文插进了作者的稿子，
+       * 不报错、不提示。跟 0.3 那个便利贴的 bug 是同一个，换了个入口。
+       *
+       * 现在放的是自定义类型：谁听得懂谁接，别人一概听不见。
+       */
+      if (doc) startDocDrag(e, key)
+      else startRowDrag(e)
       setDrag({ dir, index })
     },
     onDragEnd: () => {
@@ -118,7 +131,7 @@ export function TextTree({
           <div key={node.path}>
             <div
               className="tree-item tree-volume"
-              {...dragProps(textDir, i, node.path)}
+              {...dragProps(textDir, i, node.path, false)}
               onContextMenu={(e) => onMenu(e, volumeMenu(node))}
             >
               <span className="tree-caret">▾</span>
@@ -139,7 +152,7 @@ export function TextTree({
                 title={c.title}
                 onClick={() => actions.open(c.path)}
                 onContextMenu={(e) => onMenu(e, chapterMenu(c))}
-                {...dragProps(node.path, ci, c.path)}
+                {...dragProps(node.path, ci, c.path, true)}
               >
                 <span className="name">{c.title}</span>
               </button>
@@ -152,7 +165,7 @@ export function TextTree({
             title={node.title}
             onClick={() => actions.open(node.path)}
             onContextMenu={(e) => onMenu(e, chapterMenu(node))}
-            {...dragProps(textDir, i, node.path)}
+            {...dragProps(textDir, i, node.path, true)}
           >
             <span className="name">{node.title}</span>
           </button>
@@ -253,10 +266,17 @@ export function SettingsTree({
               className={`tree-item tree-chapter sticky-draggable${card.path === activePath ? ' active' : ''}`}
               onClick={() => actions.open(card.path)}
               onContextMenu={(e) => onMenu(e, cardMenu(card.path, card.title))}
-              // 拖到稿纸上就变成一张悬浮便利贴
+              /*
+               * 一张卡片有两个身份，拖出去的时候两个都带上：
+               * 拖到稿纸上是**一张悬浮便利贴**，拖进侧边栏那个虚线框是
+               * **摆到右半边对照的一篇**。靠类型分，不靠落点猜。
+               */
               draggable
-              onDragStart={(e) => startStickyDrag(e, card.path)}
-              title={`${card.title}（可以拖到稿纸上）`}
+              onDragStart={(e) => {
+                startStickyDrag(e, card.path)
+                startDocDrag(e, card.path)
+              }}
+              title={`${card.title}（拖到稿纸上贴一张；拖进侧边栏的虚线框摆到右半边）`}
             >
               <span className="name">{card.title}</span>
             </button>
@@ -271,8 +291,11 @@ export function SettingsTree({
           onClick={() => actions.open(card.path)}
           onContextMenu={(e) => onMenu(e, cardMenu(card.path, card.title))}
           draggable
-          onDragStart={(e) => startStickyDrag(e, card.path)}
-          title={`${card.title}（可以拖到稿纸上）`}
+          onDragStart={(e) => {
+            startStickyDrag(e, card.path)
+            startDocDrag(e, card.path)
+          }}
+          title={`${card.title}（拖到稿纸上贴一张；拖进侧边栏的虚线框摆到右半边）`}
         >
           <span className="name">{card.title}</span>
         </button>
@@ -324,6 +347,15 @@ export function OutlineTree({
           key={o.path}
           className={`tree-item${o.path === activePath ? ' active' : ''}`}
           onClick={() => actions.open(o.path)}
+          /*
+           * 大纲原来一点都拖不动。而「照着大纲改稿」正是双屏最常见的
+           * 一种摆法 —— 让它能拖进虚线框，比让作者去顶栏点开一个
+           * 搜索框再把大纲的名字打一遍顺手得多。
+           * （这一层没有排序，所以只有拖出去，没有接住）
+           */
+          draggable
+          onDragStart={(e) => startDocDrag(e, o.path)}
+          title={`${o.title}（可以拖进侧边栏的虚线框，摆到右半边对照）`}
           onContextMenu={(e) =>
             onMenu(e, [
               { label: '打开', onClick: () => actions.open(o.path) },

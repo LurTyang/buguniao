@@ -3754,6 +3754,22 @@ button.links-item:hover {
   color: var(--primary-color);
 }
 
+/*
+ * 字数前面那个「本章 / 右边」的小标（0.5）。
+ *
+ * 双屏时这个数跟着光标走，不写出来数的是哪一篇的话，
+ * 作者看见的就只是「字数自己在跳」。只在开着双屏时才出现 ——
+ * 没有第二半可选的时候，一个写着「本章」的小标是纯噪音。
+ */
+.topbar-side {
+  margin-right: 4px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--item-hover-bg-color);
+  color: var(--md-char-color);
+  font-size: 11px;
+}
+
 /* ═══════════════════ 总设置 ═══════════════════ */
 
 .set-overlay {
@@ -4747,4 +4763,62 @@ button.links-item:hover {
   outline: 1px dashed var(--primary-color);
   outline-offset: 8px;
   border-radius: 6px;
+}
+
+/* ── 侧边栏最上面那个虚线框：双屏的入口（0.5）───────────────
+ *
+ * 规范：更新文档/11-0.5规划.md §1.6
+ *
+ * 虚线在所有软件里都是同一句话：「这里可以放东西」。
+ * 实心按钮不会让人想到往上拖，而这个框八成的用法是拖。
+ */
+.split-drop {
+  display: block;
+  width: calc(100% - 16px);
+  margin: 2px 8px 8px;
+  padding: 10px 8px;
+  /* 虚线要看得见才算数 —— `--window-border` 在浅色主题里几乎跟底色一样，
+     那就成了一个「没人看得出可以往上拖」的投放区 */
+  border: 1px dashed var(--md-char-color);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--control-text-color);
+  text-align: center;
+  cursor: pointer;
+  /* 拖着一章过来时四边一起亮，所以过渡要短 —— 慢了就像没反应 */
+  transition: border-color 0.12s, background-color 0.12s;
+}
+.split-drop:hover,
+.split-drop:focus-visible {
+  border-color: var(--primary-color);
+  background: var(--bg-raised);
+  outline: none;
+}
+/* 有东西正悬在框上。**必须显眼** —— 不确定能不能放的时候，没人敢松手 */
+.split-drop.hot {
+  border-style: solid;
+  border-color: var(--primary-color);
+  background: var(--item-hover-bg-color);
+}
+/* 双屏开着的时候框本身就是个状态显示：右边现在摆着谁 */
+.split-drop.on {
+  border-style: solid;
+  border-color: var(--window-border);
+  background: var(--bg-raised);
+}
+.split-drop-title {
+  font-size: 13px;
+  color: var(--text-color);
+}
+.split-drop-hint {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--md-char-color);
+  /* 章节名可能很长，一行放不下就截掉 —— 撑宽了会把侧边栏挤变形 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.split-drop-cur {
+  color: var(--control-text-color);
 }
