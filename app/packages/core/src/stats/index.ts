@@ -195,7 +195,35 @@ export function buildSessions(
 export interface DayStat {
   /** YYYY-MM-DD */
   day: string
+  /**
+   * 这一天**写了多少**。净增，**下限是 0**。
+   *
+   * ─────────────────────────────────────────────────────────────
+   * 【为什么要有下限】
+   *
+   * 作者报的：「删除文本时，目前会直接将今天写的内容扣成负数，
+   * 这实在太奇怪了，每日写了应该统计净增。」
+   *
+   * 原来这个数是当天所有增删的代数和，于是删掉一章旧稿之后，
+   * 顶栏会写着「今日 -2,300 字」。而这个数不只是给人看的 ——
+   * 达标判定、连胜、热力图、对外统计那七个数全都读它。
+   * 一个负数在这几处的意思分别是「今天没达标」「连胜断了」
+   * 「热力图画一格负色」和「往外推一个负字数」。
+   *
+   * **一天之内的增删照样抵消**（早上写三千、下午删五百，算两千五 ——
+   * 那是诚实的）。只是「增」不会变成负的：删得比写得多，那天算 0。
+   *
+   * 真实的代数和留在 `net` 里，没有丢。
+   * ─────────────────────────────────────────────────────────────
+   */
   words: number
+  /**
+   * 真实的代数和，**可以是负的**。
+   *
+   * 改稿那天净产出是负的，而你确实干了一下午活 —— 这件事该看得见，
+   * 只是不该由 `words` 去表达（见上）。
+   */
+  net: number
   /** 该日保存次数 */
   saves: number
   /** 该日番茄钟内产出的字数 */
@@ -209,6 +237,7 @@ export interface DayStat {
 const EMPTY_DAY = (day: string): DayStat => ({
   day,
   words: 0,
+  net: 0,
   saves: 0,
   pomoWords: 0,
   sessions: 0,
@@ -226,7 +255,7 @@ export function byDay(records: readonly StatRecord[], opts: StatsOptions = {}): 
 
   for (const s of sessions) {
     const cur = map.get(s.day) ?? EMPTY_DAY(s.day)
-    cur.words += s.words
+    cur.net += s.words
     cur.saves += s.saves
     cur.sessions += 1
     cur.activeMs += s.durationMs
@@ -240,6 +269,18 @@ export function byDay(records: readonly StatRecord[], opts: StatsOptions = {}): 
     if (!owner) continue
     const cur = map.get(owner.day)
     if (cur) cur.pomoWords += r.delta
+  }
+
+  /*
+   * 「写了多少」是净增，**下限 0** —— 理由见 DayStat.words 那段。
+   *
+   * 场次那一层不夹（`buildSessions` 给的 words 照旧可以是负的）：
+   * 「这一坐删得比写得多」是真实发生过、也该看得见的事。
+   * 夹的是**天**，因为天这个粒度上的数会去决定达标、连胜、热力图和对外那七个数。
+   */
+  for (const d of map.values()) {
+    d.words = Math.max(0, d.net)
+    d.pomoWords = Math.max(0, d.pomoWords)
   }
 
   return [...map.values()].sort((a, b) => a.day.localeCompare(b.day))

@@ -41,6 +41,7 @@ const R = (o: Partial<StatRecord> & { ts: number; delta: number }): StatRecord =
 const D = (day: string, words: number): DayStat => ({
   day,
   words,
+  net: words,
   saves: 1,
   pomoWords: 0,
   sessions: 1,
@@ -235,12 +236,45 @@ describe('byDay · 按会话归属聚合', () => {
     expect(days.map((d) => d.day)).toEqual(['2026-08-25', '2026-08-27'])
   })
 
-  it('净增可以为负', () => {
+  it('一天之内增删照样抵消', () => {
+    // 早上写三千、下午删五百，这一天就是两千五 —— 那是诚实的
+    const days = byDay([
+      R({ ts: at(2026, 8, 25, 10, 0), delta: 3000 }),
+      R({ ts: at(2026, 8, 25, 10, 5), delta: -500 }),
+    ])
+    expect(days[0]?.words).toBe(2500)
+    expect(days[0]?.net).toBe(2500)
+  })
+
+  it('【关键】删得比写得多时，这一天算 0，不是负数', () => {
+    /*
+     * 作者报的：「删除文本时，目前会直接将今天写的内容扣成负数。」
+     *
+     * 这个数不只是给人看的 —— 达标、连胜、热力图、对外那七个数全读它。
+     * 负数在这几处分别是「今天没达标」「连胜断了」「热力图一格负色」
+     * 和「往外推一个负字数」。
+     */
     const days = byDay([
       R({ ts: at(2026, 8, 25, 10, 0), delta: 1000 }),
       R({ ts: at(2026, 8, 25, 10, 5), delta: -1500 }),
     ])
-    expect(days[0]?.words).toBe(-500)
+    expect(days[0]?.words).toBe(0)
+  })
+
+  it('真实的代数和留在 net 里，没有丢', () => {
+    const days = byDay([
+      R({ ts: at(2026, 8, 25, 10, 0), delta: 1000 }),
+      R({ ts: at(2026, 8, 25, 10, 5), delta: -1500 }),
+    ])
+    expect(days[0]?.net).toBe(-500)
+  })
+
+  it('场次那一层不夹 —— 「这一坐删得比写得多」该看得见', () => {
+    const s = buildSessions([
+      R({ ts: at(2026, 8, 25, 10, 0), delta: 1000 }),
+      R({ ts: at(2026, 8, 25, 10, 5), delta: -1500 }),
+    ])
+    expect(s[0]?.words).toBe(-500)
   })
 })
 
