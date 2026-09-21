@@ -69,6 +69,13 @@ export interface SidePaneProps {
   /** 右边的光标在屏幕哪儿 —— 便利贴靠它让路 */
   onCaretMove(pos: { x: number; y: number } | null): void
   /**
+   * 右边这一篇**改名了**（没起名的那一篇第一次存盘，按正文第一行起了名）。
+   *
+   * 非报不可：右边摆的是哪一篇记在设置里，那儿还是旧路径的话，
+   * 下一次打开这本书，右半边会去读一个已经不存在的文件。
+   */
+  onRenamed(from: string, next: string): void
+  /**
    * 光标挪到右半边来了。
    *
    * 顶栏那个字数数的是**有光标的那一篇**（作者定的，见 split.ts 的
@@ -125,6 +132,28 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
    */
   const loadedFor = useRef<string | null>(null)
   const timer = useRef(0)
+  /*
+   * 自动起名改出来的那个新路径。
+   *
+   * 下一次 `path` 变成它时**不当成换了一篇**：不重读盘、不重建编辑器。
+   * 重建的代价是撤销历史清空、光标回开头 —— 而这一刻人正在这儿打字
+   * （起名恰恰是被他打的字触发的）。
+   */
+  const selfRenamed = useRef<string | null>(null)
+  /*
+   * 报改名的那个回调走 ref。
+   *
+   * 存盘的那几个闭包只在 mode/path 变时重建，而这个回调背后挂着
+   * 外面此刻的设置 —— 拿旧的去调，会把「右边摆的是哪一篇」写回旧值。
+   */
+  const onRenamedRef = useRef(props.onRenamed)
+  onRenamedRef.current = props.onRenamed
+  /**
+   * 编辑器的身份。**改名不换身份。**
+   *
+   * 不能直接拿 path 当 key：那样改一次名就重建一次编辑器。
+   */
+  const [paneKey, setPaneKey] = useState('')
 
   const path = right?.path ?? ''
   const saves = rightSaves(mode)
@@ -137,7 +166,14 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
    * 于是两边一开始就不一致，那根线只会把这个不一致一直传下去。
    */
   useEffect(() => {
+    // 这个新路径是我们自己刚改出来的：认领一下就完事，别当换了一篇
+    if (selfRenamed.current === path) {
+      selfRenamed.current = null
+      loadedFor.current = path
+      return
+    }
     let dead = false
+    setPaneKey(`${mode}:${path}`)
     setReady(false)
     /*
      * 手里这份**先作废**。
@@ -220,7 +256,14 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
     if (!safeToSave(mode, loadedFor.current, path)) return
     window.clearTimeout(timer.current)
     try {
-      await api.saveDoc(path, bodyRef.current)
+      const out = await api.saveDoc(path, bodyRef.current)
+      // 刚被起了名：先自己认下新路径（不然这中间任何一次存盘都会被
+      // safeToSave 挡掉），再告诉外面把「右边摆的是哪一篇」改过来
+      if (out.path !== path) {
+        selfRenamed.current = out.path
+        loadedFor.current = out.path
+        onRenamedRef.current(path, out.path)
+      }
       setDirty(false)
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
@@ -236,7 +279,12 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
    */
   useEffect(() => {
     return () => {
-      if (safeToSave(mode, loadedFor.current, path)) void api.saveDoc(path, bodyRef.current)
+      if (!safeToSave(mode, loadedFor.current, path)) return
+      // 这一存也可能把没起名的那一篇起了名。**报出去** ——
+      // 不报的话，设置里记的还是旧路径，下次打开右半边会读一个不存在的文件
+      void api.saveDoc(path, bodyRef.current).then((out) => {
+        if (out.path !== path) onRenamedRef.current(path, out.path)
+      })
     }
   }, [mode, path])
 
@@ -383,9 +431,11 @@ export function SidePane(props: SidePaneProps): React.ReactElement {
         ) : (
           <Boom where="右边这半">
             <Editor
-              // 换文档要整个重建：撤销历史、那根线都得跟着换
-              key={`${mode}:${path}`}
+              // 换文档要整个重建：撤销历史、那根线都得跟着换。
+              // 用 paneKey 不用 path —— 自动起名改的只是名字，不是另一篇
+              key={paneKey}
               docPath={path || 'scratch'}
+              docKey={paneKey}
               initialBody={body}
               link={mode === 'shared' ? link : null}
               // 右半边比左边晚建好，抢焦点会把正在写字的人的光标偷走

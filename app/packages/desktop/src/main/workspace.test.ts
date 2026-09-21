@@ -480,3 +480,88 @@ describe('坚果云冲突副本', () => {
     expect(await ws.listConflicts(book)).toEqual([])
   })
 })
+
+/**
+ * 没起名的那一篇：存盘时按正文第一行起名。
+ *
+ * 作者要的：「创建新文本时，应可以创建空白标题的文本。
+ * 在保存时，这样的章节标题被显示为首行。」
+ *
+ * 这条路上会改**磁盘上的文件名**，错了就是「稿子找不着了」，
+ * 所以每一条都钉死：改对了、别人不受影响、改完之后各条链路还接得上。
+ */
+describe('自动起名', () => {
+  it('留空建出来的那一篇叫「未命名」', async () => {
+    const { book } = await newBookWithChapter()
+    const { path: p } = await ws.createChapter(`${book}/正文`, '')
+    expect(p).toBe(`${book}/正文/0020-未命名.md`)
+  })
+
+  it('【关键】第一次写进字，文件跟着改名，正文一个字不差', async () => {
+    const { book } = await newBookWithChapter()
+    const { path: p } = await ws.createChapter(`${book}/正文`, '')
+    const body = '赵嘉乐睁开眼。\n天已经亮了。'
+
+    const out = await ws.saveDoc(p, body)
+    expect(out.path).toBe(`${book}/正文/0020-赵嘉乐睁开眼。.md`)
+    expect(out.meta.title).toBe('赵嘉乐睁开眼。')
+    expect((await ws.readDoc(out.path)).body).toBe(body)
+
+    // 目录里就是那一行
+    const tree = await ws.loadTree(book)
+    expect(flattenChapters(tree.text).map((c) => c.title)).toContain('赵嘉乐睁开眼。')
+  })
+
+  it('【关键】起过名的一概不动 —— 这是这儿唯一不能犯的错', async () => {
+    const { chapter } = await newBookWithChapter()
+    const out = await ws.saveDoc(chapter, '随便写点什么。')
+    expect(out.path).toBe(chapter)
+  })
+
+  it('还一个字都没写就存，名字不动 —— 那时候还没得起', async () => {
+    const { book } = await newBookWithChapter()
+    const { path: p } = await ws.createChapter(`${book}/正文`, '')
+    const out = await ws.saveDoc(p, '   ')
+    expect(out.path).toBe(p)
+  })
+
+  it('起过一次名之后就不再自动改了 —— 后面怎么改开头都不动它', async () => {
+    const { book } = await newBookWithChapter()
+    const { path: p } = await ws.createChapter(`${book}/正文`, '')
+    const first = await ws.saveDoc(p, '第一版开头。')
+    const second = await ws.saveDoc(first.path, '换了个开头。')
+    expect(second.path).toBe(first.path)
+  })
+
+  it('改完名，版本历史和统计照样记在这一篇上', async () => {
+    const { book } = await newBookWithChapter()
+    const { path: p } = await ws.createChapter(`${book}/正文`, '')
+    const out = await ws.saveDoc(p, '赵嘉乐睁开眼。')
+
+    const hist = await ws.listVersions(book, out.meta.id)
+    expect(hist.length).toBeGreaterThan(0)
+
+    const today = await ws.todayProgress(book)
+    expect(today.words).toBeGreaterThan(0)
+  })
+
+  it('改完名还能接着存 —— 下一次保存不许写到老路径上', async () => {
+    const { book } = await newBookWithChapter()
+    const { path: p } = await ws.createChapter(`${book}/正文`, '')
+    const out = await ws.saveDoc(p, '开头。')
+    await ws.saveDoc(out.path, '开头。后面又写了两句。')
+
+    expect((await ws.readDoc(out.path)).body).toBe('开头。后面又写了两句。')
+    await expect(ws.readDoc(p)).rejects.toThrow()
+  })
+
+  it('重名就不改 —— 撞上了说明那个名字已经有主', async () => {
+    const { book } = await newBookWithChapter()
+    // 先占掉 0020-开头.md 这个名字
+    await ws.createChapter(`${book}/正文`, '开头')
+    const { path: blank } = await ws.createChapter(`${book}/正文`, '')
+    // blank 是 0030-未命名.md，它想改叫 0030-开头.md —— 序号不同，不算撞
+    const out = await ws.saveDoc(blank, '开头')
+    expect(out.path).toBe(`${book}/正文/0030-开头.md`)
+  })
+})

@@ -494,9 +494,91 @@ export async function writeNewDoc(
 /** Windows 文件名非法字符。中文标点不受影响，所以书名号引号都能用 */
 const ILLEGAL = /[\\/:*?"<>|]/g
 
+/**
+ * 还没起名的那一篇，文件就叫这个。
+ *
+ * 新建章节时标题可以留空 —— 很多时候你只是想立刻开始写，
+ * 而「这一章叫什么」要等写完开头才知道。空标题落到盘上就是这个名字，
+ * 等第一次存进字的时候，titleFromBody() 会把正文第一行提上来当标题。
+ */
+export const UNTITLED = '未命名'
+
 export function sanitizeFileName(name: string): string {
   const cleaned = name.replace(ILLEGAL, '_').replace(/[.\s]+$/, '').trim()
-  return cleaned === '' ? '未命名' : cleaned.slice(0, 100)
+  return cleaned === '' ? UNTITLED : cleaned.slice(0, 100)
+}
+
+/**
+ * 这个文件名是不是「还没起名」。
+ *
+ * ⚠️ **认的是文件名，不是 front-matter 里的 title。**
+ *
+ * 因为 front-matter 里的空标题**存不住**：`parseDoc` 读到空 title 会回退到
+ * 文件名（那是它的兜底规则，而且是对的 —— 别的软件建的 .md 没有 title，
+ * 总得有个名字）。于是「作者没起名」这件事在一次读写之后就分辨不出来了。
+ *
+ * 而文件名本来就是这个软件里标题的**真身**（目录树的标题正是从它来的），
+ * 所以让它顺带承担「还没起名」这个状态，不额外发明一个标记字段。
+ */
+export function isUntitledFile(fileName: string): boolean {
+  return stripMd(parseName(fileName).rest) === UNTITLED
+}
+
+/**
+ * 拿正文第一行当标题。没有能用的第一行时返回空串。
+ *
+ * ─────────────────────────────────────────────────────────────
+ * 【三条刻意的处理】
+ *
+ * · **找第一个非空行**，不是第一行 —— 新建的文档正文头上有一个空行
+ *   （`withLeadingBlankLine`，纯粹为了排版好看）。
+ * · **`# 第三章` 这样的标题行要去掉井号。** 不少人开篇先写一行标题，
+ *   而带着井号的文件名（`0010-# 第三章.md`）既难看又没必要。
+ * · **截断到 max 个字。** 第一行可能是一整段两百字的正文；
+ *   目录里摆不下，文件名也不该那么长。截断**不加省略号** ——
+ *   省略号会进文件名，而它在别的软件里排序、搜索都碍事。
+ * ─────────────────────────────────────────────────────────────
+ */
+export function titleFromBody(body: string, max = 30): string {
+  for (const raw of body.split('\n')) {
+    const line = raw.replace(/^\s{0,3}#{1,6}\s+/, '').trim()
+    if (line === '') continue
+    return [...line].slice(0, max).join('').trim()
+  }
+  return ''
+}
+
+/**
+ * 还没起名的那一篇，这次保存该把它改叫什么。不用改名时返回 null。
+ *
+ * ─────────────────────────────────────────────────────────────
+ * 【为什么是改文件名，而不是只改 front-matter 里的 title】
+ *
+ * 因为在这个软件里**文件名就是标题**（目录树的标题从它来，导出、搜索、
+ * 别的编辑器看到的也是它）。只改 front-matter 的话，作者在资源管理器里
+ * 看到的还是一排 `0010-未命名.md` —— 而「打开文件夹就能看懂」
+ * 正是这软件的第一条铁律。
+ *
+ * 序号前缀原样留着：起名不该顺带改顺序，那是两件事。
+ * ─────────────────────────────────────────────────────────────
+ */
+export function autoTitlePath(
+  path: string,
+  body: string,
+  max = 30,
+): { path: string; title: string } | null {
+  const fileName = path.slice(path.lastIndexOf('/') + 1)
+  if (!isUntitledFile(fileName)) return null
+
+  const title = titleFromBody(body, max)
+  if (title === '') return null
+
+  const dir = path.slice(0, path.lastIndexOf('/'))
+  const { order } = parseName(fileName)
+  const nextFile = `${sanitizeFileName(title)}.md`
+  const next = joinPath(dir, order === null ? nextFile : buildName(order, nextFile))
+  // 算出来还是原来那个名字（作者就把第一行写成了「未命名」）：不折腾
+  return next === path ? null : { path: next, title }
 }
 
 function isMd(name: string): boolean {

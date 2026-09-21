@@ -343,6 +343,15 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
    * 「打开这篇之后写了多少」—— 那正好也是他想问的。
    */
   const manualBase = useRef(new Map<string, number>())
+  /**
+   * 刚刚自动起名改掉的路径。
+   *
+   * 左右两半存盘都可能触发（没起名的那一篇第一次写进字时，
+   * 标题按正文第一行定下来，文件跟着改名），所以认领动作**只写一遍**，
+   * 放在下面那个 effect 里 —— 两边各写一遍的话，迟早有一处漏掉，
+   * 表现是「下一次保存写进了一个不存在的文件」。
+   */
+  const [renamed, setRenamed] = useState<{ from: string; to: string } | null>(null)
 
   /**
    * 上次离开时停在哪儿 —— **进这本书那一刻的那一份**。
@@ -537,6 +546,9 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
     try {
       const out = await api.saveDoc(path, written)
       setMeta(out.meta)
+      // 没起名的那一篇刚被起了名（按正文第一行），文件跟着改了名。
+      // 认新路径这件事统一交给下面那个 effect —— 左右两半走同一条路
+      if (out.path !== path) setRenamed({ from: path, to: out.path })
       setLoadedBody(written)
       loadedBodyRef.current = written
       savedTickRef.current += 1
@@ -616,6 +628,37 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
     },
     [book.rootPath, openDoc, refreshCast],
   )
+
+  /**
+   * 认下自动起名改出来的新路径。
+   *
+   * ⚠️ 每一处都得**先对一对是不是这一篇**再改：改名报上来的时候，
+   * 作者可能已经切到别的文档、右半边也可能换了一篇 ——
+   * 不对就改，会把他刚挑的那一篇顶掉。
+   *
+   * 稿纸本身不会重建：编辑器认的是文档 id（`docKey`），不是路径。
+   * 起名恰恰是被正在打的字触发的，这时候重建一次等于把撤销历史扔了。
+   */
+  useEffect(() => {
+    if (!renamed) return
+    const { from, to } = renamed
+    setRenamed(null)
+
+    if (docPathRef.current === from) {
+      docPathRef.current = to
+      setDocPath(to)
+    }
+    // 「距上次手动保存新增了多少」那个基线跟着搬，不然下一次手动保存会报一个假的增量
+    const base = manualBase.current.get(from)
+    if (base !== undefined) {
+      manualBase.current.set(to, base)
+      manualBase.current.delete(from)
+    }
+    const right = settings.splitRight
+    if (right && right.path === from) onSettingsChange({ splitRight: { ...right, path: to } })
+
+    void refreshTree()
+  }, [renamed, settings.splitRight, onSettingsChange, refreshTree])
 
   // ── 初次加载 ──
 
@@ -1068,6 +1111,8 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
         case 'newChapter': {
           const { path } = await api.createChapter(d.dir, value!)
           await refreshTree(path)
+          // 留空建出来的那一篇眼下叫「未命名」，得说一声它什么时候会变
+          if (!value) flash('先写就是了 —— 存盘时这一章的标题会变成正文第一行。')
           break
         }
         case 'newScript': {
@@ -1082,7 +1127,11 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
           // 见 Dialog 里 newSplitDoc 上那段注释
           await refreshTree()
           onSettingsChange({ splitOn: true, splitRight: { kind: 'doc', path } })
-          flash('新的那篇摆在右边了，左边这篇一个字没动。')
+          flash(
+            value
+              ? '新的那篇摆在右边了，左边这篇一个字没动。'
+              : '新的那篇摆在右边了 —— 标题空着，存盘时按正文第一行定。',
+          )
           break
         }
         case 'newGameScript': {
@@ -1691,6 +1740,14 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
               onChange={onChange}
               onSaveRequest={() => void doSave(true)}
               onCaretMove={setCaret}
+              /*
+               * 编辑器认的「同一篇」是**文档 id**，不是路径。
+               *
+               * 没起名的那一篇第一次存盘时会按正文第一行改名，路径当场就变了 ——
+               * 而那一刻人正在这儿打字。认路径的话这一下会重建整个编辑器：
+               * 撤销历史清空、光标回开头。id 不变，所以认 id。
+               */
+              docKey={meta?.id}
               // 光标回到左边了 —— 顶栏那个字数跟着数左边这一篇
               onFocus={() => setFocusedPane('left')}
               onEdit={(a, r) => setSession((c) => addEdit(c, a, r))}
@@ -1757,6 +1814,8 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
               onCaretMove={setCaret}
               // 光标挪到右边了 —— 顶栏那个字数跟着数右边这一篇
               onFocus={() => setFocusedPane('right')}
+              // 右边那一篇刚被起了名。认领走上面那个 effect，跟左边同一条路
+              onRenamed={(from, to) => setRenamed({ from, to })}
               onStickyDrop={dropSticky}
               onPickDoc={() => setPickingRight(true)}
               onClose={() => onSettingsChange({ splitOn: false })}
@@ -1921,9 +1980,10 @@ function renderDialog(
       return (
         <PromptModal
           title="在右边新建一篇空白文档"
-          hint="它是书里真真正正的一篇 —— 进目录、算字数、能导出。建好之后直接摆到右半边，左边这篇一个字不动。只想随手记点什么、不想在书里多出一篇的话，用「新建临时文档」。"
-          placeholder="标题，如「第三章 转折」"
+          hint="它是书里真真正正的一篇 —— 进目录、算字数、能导出。建好之后直接摆到右半边，左边这篇一个字不动。标题可以留空，存盘时按正文第一行定。只想随手记点什么、不想在书里多出一篇的话，用「新建临时文档」。"
+          placeholder="标题，留空也行"
           confirmText="创建"
+          allowEmpty
           onConfirm={run}
           onCancel={cancel}
         />
@@ -1932,8 +1992,11 @@ function renderDialog(
       return (
         <PromptModal
           title="新建章节"
-          placeholder="章节标题，如「第三章 转折」"
+          hint="标题可以留空 —— 那就先写，等这一章存盘时，标题按正文第一行自动定下来。"
+          placeholder="章节标题，留空也行"
           confirmText="创建"
+          // 很多时候你只是想立刻开始写，而「这一章叫什么」得等写完开头才知道
+          allowEmpty
           onConfirm={run}
           onCancel={cancel}
         />

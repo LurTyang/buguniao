@@ -13,6 +13,7 @@
 
 import {
   appendSave,
+  autoTitlePath,
   serializeDoc,
   countWords,
   createStatRecord,
@@ -1628,6 +1629,21 @@ export class Workspace {
     // 记下是哪台机器写的 —— 「这一篇在别处改过」的对话框要拿它说话
     const doc: ParsedDoc = { ...existing, body, meta: { ...existing.meta, device: this.deviceName } }
 
+    /*
+     * ── 没起名的那一篇，这一存就把标题定下来 ──
+     *
+     * 作者要的：「创建新文本时，应可以创建空白标题的文本。
+     * 在保存时，这样的章节标题被显示为首行。」
+     *
+     * 只对**正文**生效。设定卡的名字是作者在卡片里认的那个名字
+     * （便利贴、`@` 引用都按它找人），拿正文第一行去改它会把引用改断。
+     *
+     * 算在写盘**之前**，因为 front-matter 里的 title 要跟文件名一起改 ——
+     * 分两次写的话，中间崩一次就留下一个「名字和标题对不上」的文件。
+     */
+    const auto = existing.meta.type === 'chapter' ? autoTitlePath(path, body) : null
+    if (auto) doc.meta.title = auto.title
+
     // 净增必须拿**磁盘上的旧正文**来算，不能靠内存里缓存的「上次字数」。
     // 缓存在两种常见情况下是空的：新建的章节、软件重启后第一次保存。
     // 那时会把净增算成 0 —— 新写三千字保存后统计显示 0，作者会以为软件坏了。
@@ -1637,12 +1653,40 @@ export class Workspace {
     const saved = await writeDoc(this.backend, path, doc)
     const chars = countWords(body).withPunctuation
 
+    /*
+     * 1.5 改名。**排在正文之后**：改名失败最多是名字还叫「未命名」，
+     * 而正文已经安安稳稳落盘了。反过来的话，改名成功而正文写失败，
+     * 作者会在目录里看见一篇名字对、内容还是旧的稿子。
+     *
+     * 重名就不改 —— 撞上了说明那个名字已经有主，宁可继续叫「未命名」。
+     */
+    let cur = path
+    if (auto) {
+      try {
+        if (!(await this.backend.stat(auto.path))) {
+          await this.backend.rename(path, auto.path)
+          // 改完名**立刻**认下新路径：下面几步（历史、统计、索引）都得用它。
+          // 放到清理之后的话，清理抛一下就会让它们去写一个已经不存在的文件
+          cur = auto.path
+          // 历史和索引都是按路径记的，旧键留着会指向一个不存在的文件
+          this.histories.delete(path)
+          try {
+            this.index.removeByPath(path)
+          } catch (e) {
+            console.error('[bugu] 从索引移除旧路径失败:', e)
+          }
+        }
+      } catch (e) {
+        console.error('[bugu] 自动起名失败（正文已保存，不影响稿子）:', e)
+      }
+    }
+
     let version: number | null = null
     let historyAction: SaveOutcome['historyAction'] = 'skipped'
 
     // 2. 版本历史
     try {
-      const entry = await this.historyFor(saved.meta.id, path)
+      const entry = await this.historyFor(saved.meta.id, cur)
       const result = appendSave(entry.state, { content: body, ts: now, dev: this.deviceId })
       entry.state = result.state
       historyAction = result.action
@@ -1653,7 +1697,7 @@ export class Workspace {
         // 路径必须带上作品根目录 —— metaPaths 给的是**相对作品**的路径，
         // 直接用会写到库根目录下，跟读取时的位置对不上（历史存了却永远读不回来）
         await this.backend.append(
-          `${bookRootOf(path)}/${metaPaths.history(saved.meta.id, this.deviceId)}`,
+          `${bookRootOf(cur)}/${metaPaths.history(saved.meta.id, this.deviceId)}`,
           JSON.stringify(result.record),
         )
       }
@@ -1670,7 +1714,7 @@ export class Workspace {
         if (now - this.lastSaveTs > 30 * 60_000) this.sessionId = `s-${now.toString(36)}`
         this.lastSaveTs = now
 
-        const bookRoot = bookRootOf(path)
+        const bookRoot = bookRootOf(cur)
         await this.backend.append(
           `${bookRoot}/${metaPaths.stats(this.deviceId)}`,
           JSON.stringify(
@@ -1692,19 +1736,21 @@ export class Workspace {
 
     // 4. 索引（失败只记日志，绝不影响已经保存好的正文）
     try {
-      const stat = await this.backend.stat(path)
+      const stat = await this.backend.stat(cur)
       this.index.upsertDoc({
-        book: bookRootOf(path),
-        path,
+        book: bookRootOf(cur),
+        path: cur,
         raw: serializeDoc(saved.meta, body),
         mtime: stat?.mtime ?? now,
-        fileName: path.slice(path.lastIndexOf('/') + 1),
+        fileName: cur.slice(cur.lastIndexOf('/') + 1),
       })
     } catch (e) {
       console.error('[bugu] 更新索引失败（正文已保存，不影响稿子）:', e)
     }
 
-    return { meta: saved.meta, chars, version, historyAction }
+    // 路径**一定要报回去**：改了名而界面还拿着旧路径的话，
+    // 下一次保存会往一个已经不存在的文件上写
+    return { meta: saved.meta, chars, version, historyAction, path: cur }
   }
 
   // ── 统计 ──

@@ -97,6 +97,23 @@ const E2E_SCRIPT = `(async () => {
     check('重命名后正文没动', afterRename.body === TEXT)
     check('重命名后 id 不变', afterRename.meta.id === saved.meta.id)
 
+    // ── 没起名的那一篇：存盘时按正文第一行起名 ──
+    //
+    // 作者要的：「创建新文本时，应可以创建空白标题的文本。
+    // 在保存时，这样的章节标题被显示为首行。」
+    // 这条路会**改磁盘上的文件名**，所以在真环境里也走一遍：
+    // 内存后端上过的测试证明不了 Windows 上那次 rename 真的成了。
+    const blank = await api.createChapter(book.rootPath + '/正文', '')
+    check('标题留空也能建出来', blank.path.indexOf('未命名.md') > -1, blank.path)
+    const named = await api.saveDoc(blank.path, '赵嘉乐睁开眼，天已经亮了。')
+    check('【关键】存盘时按正文第一行起了名',
+      named.path.indexOf('赵嘉乐睁开眼，天已经亮了。.md') > -1, named.path)
+    check('起名之后读得回来，正文一个字不差',
+      (await api.readDoc(named.path)).body === '赵嘉乐睁开眼，天已经亮了。')
+    tree = await api.loadTree(book.rootPath)
+    check('目录里显示的就是那一行',
+      JSON.stringify(tree.text).indexOf('赵嘉乐睁开眼，天已经亮了。') > -1)
+
     // ── 排序 ──
     const ch3 = await api.createChapter(book.rootPath + '/正文', '第三章 出门')
     tree = await api.loadTree(book.rootPath)

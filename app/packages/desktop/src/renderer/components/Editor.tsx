@@ -284,6 +284,16 @@ function writingExtensions(w: EditorProps['writing']): Extension[] {
 export interface EditorProps {
   /** 文档路径，变化时重建编辑器 */
   docPath: string
+  /**
+   * 这块稿纸认的「同一篇」是谁。默认就是 `docPath`。
+   *
+   * ⚠️ 换了它**整个编辑器会重建** —— 撤销历史清空、光标回开头。
+   * 换文档时这是对的，但有一种情况路径变了而文档没变：
+   * 没起名的那一篇第一次存盘时按正文第一行改了名（见 workspace 的 saveDoc）。
+   * 那一刻人正在这儿打字，重建一次等于把他刚写的撤销记录全扔了、
+   * 光标扔回开头。所以那种场合要传一个不跟着路径走的身份（文档 id）。
+   */
+  docKey?: string
   initialBody: string
   onChange(body: string): void
   /** Ctrl+S */
@@ -394,6 +404,7 @@ export interface EditorProps {
 
 export function Editor({
   docPath,
+  docKey,
   initialBody,
   link,
   autoFocus = true,
@@ -427,6 +438,9 @@ export function Editor({
   // 建视图那个 effect 只认 docPath，所以这个值得走 ref
   const autoFocusRef = useRef(autoFocus)
   autoFocusRef.current = autoFocus
+
+  /** 重建编辑器的判据。默认跟路径走，传了 docKey 就跟它走 —— 见 docKey 那条注释 */
+  const viewKey = docKey ?? docPath
 
   const readOnlyRef = useRef(readOnly)
   readOnlyRef.current = readOnly
@@ -627,7 +641,7 @@ export function Editor({
     }
     // 只在切换文档时重建。initialBody 变化不重建 —— 那是我们自己写回去的内容
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docPath])
+  }, [viewKey])
 
   /*
    * 把这个视图挂到那根线上。
@@ -642,7 +656,7 @@ export function Editor({
     const view = viewRef.current
     if (!view || !link) return
     return link.attach(view)
-  }, [link, docPath])
+  }, [link, viewKey])
 
   /**
    * 外部（主进程）改了正文时把内容换掉。

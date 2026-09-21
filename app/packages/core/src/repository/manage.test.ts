@@ -20,12 +20,15 @@ import {
   loadTree,
   moveChapterToDir,
   readDoc,
+  autoTitlePath,
+  isUntitledFile,
   renameDoc,
   renameVolume,
   reorderInDir,
+  titleFromBody,
+  writeNewDoc,
   restoreFromTrash,
   trashDoc,
-  writeNewDoc,
   type SettingCategory,
 } from './index.js'
 
@@ -378,5 +381,94 @@ describe('createSettingCategory', () => {
     tree = await loadTree(b, '第九神座')
     expect(cat(tree.settings, '势力').cards.map((c) => c.title)).toEqual(['青云门'])
     expect(b.peek('第九神座/设定集/势力/青云门.md')).toContain('# 青云门')
+  })
+})
+
+/**
+ * 没起名的那一篇。
+ *
+ * 作者要的：「创建新文本时，应可以创建空白标题的文本。
+ * 在保存时，这样的章节标题被显示为首行。」
+ *
+ * 这两个纯函数是那条路上唯一会算错的地方 —— 认错了「还没起名」，
+ * 后果是**一篇起好名的稿子被自己改了名**。
+ */
+describe('没起名的那一篇', () => {
+  it('标题留空时，文件名是「未命名」', async () => {
+    const b = sampleLibrary()
+    const { path } = await writeNewDoc(b, '第九神座/正文', '', 'chapter', '')
+    expect(path.endsWith('未命名.md')).toBe(true)
+    expect(isUntitledFile(path.slice(path.lastIndexOf('/') + 1))).toBe(true)
+  })
+
+  it('起过名的认作起过名 —— 认错了会把人家的稿子改了名', () => {
+    expect(isUntitledFile('0010-第三章 转折.md')).toBe(false)
+    expect(isUntitledFile('0010-未命名的旅程.md')).toBe(false)
+    expect(isUntitledFile('0010-未命名.md')).toBe(true)
+    // 没有序号前缀的也认（设定卡就没有）
+    expect(isUntitledFile('未命名.md')).toBe(true)
+  })
+
+  it('拿第一行当标题', () => {
+    expect(titleFromBody('赵嘉乐睁开眼。\n天亮了。')).toBe('赵嘉乐睁开眼。')
+  })
+
+  it('【关键】跳过开头的空行 —— 新建的文档正文头上就有一个', () => {
+    expect(titleFromBody('\n\n赵嘉乐睁开眼。')).toBe('赵嘉乐睁开眼。')
+  })
+
+  it('第一行是 Markdown 标题时去掉井号', () => {
+    expect(titleFromBody('# 第三章 转折\n\n正文。')).toBe('第三章 转折')
+    expect(titleFromBody('### 小节')).toBe('小节')
+  })
+
+  it('太长的截断，且不加省略号 —— 省略号会进文件名', () => {
+    const long = '一'.repeat(80)
+    expect(titleFromBody(long)).toBe('一'.repeat(30))
+    expect(titleFromBody(long, 8)).toBe('一'.repeat(8))
+  })
+
+  it('一个字都没有时返回空串 —— 那就还不能起名', () => {
+    expect(titleFromBody('')).toBe('')
+    expect(titleFromBody('\n\n   \n')).toBe('')
+  })
+
+  it('井号后面没有空格的不当标题 —— 那是游戏剧本的节点名', () => {
+    // `#节点名` 是游戏剧本的写法，不是 Markdown 标题
+    expect(titleFromBody('#开场')).toBe('#开场')
+    expect(titleFromBody('#')).toBe('#')
+  })
+})
+
+describe('自动起名：该改叫什么', () => {
+  it('第一次写进字，文件名跟着变成第一行', () => {
+    expect(autoTitlePath('第九神座/正文/0010-未命名.md', '\n赵嘉乐睁开眼。')).toEqual({
+      path: '第九神座/正文/0010-赵嘉乐睁开眼。.md',
+      title: '赵嘉乐睁开眼。',
+    })
+  })
+
+  it('【关键】起过名的一概不动 —— 这是这个函数唯一不能犯的错', () => {
+    expect(autoTitlePath('第九神座/正文/0010-第三章 转折.md', '正文')).toBeNull()
+  })
+
+  it('还一个字都没有时不起名', () => {
+    expect(autoTitlePath('第九神座/正文/0010-未命名.md', '\n\n  ')).toBeNull()
+  })
+
+  it('序号前缀原样留着 —— 起名不该顺带改顺序', () => {
+    expect(autoTitlePath('第九神座/正文/0230-未命名.md', '开头')?.path).toBe(
+      '第九神座/正文/0230-开头.md',
+    )
+  })
+
+  it('第一行里有文件名不许出现的字符时换掉，不是报错', () => {
+    expect(autoTitlePath('第九神座/正文/0010-未命名.md', '他问：真的?')?.path).toBe(
+      '第九神座/正文/0010-他问：真的_.md',
+    )
+  })
+
+  it('第一行正好写着「未命名」时不折腾', () => {
+    expect(autoTitlePath('第九神座/正文/0010-未命名.md', '未命名')).toBeNull()
   })
 })

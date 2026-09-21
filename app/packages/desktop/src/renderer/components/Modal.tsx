@@ -22,6 +22,14 @@ export interface PromptModalProps {
   placeholder?: string
   initial?: string
   confirmText?: string
+  /**
+   * 允许留空就按确定。
+   *
+   * 新建章节要的：很多时候你只是想立刻开始写，而「这一章叫什么」
+   * 得等写完开头才知道。留空建出来的那一篇，第一次存盘时
+   * 会拿正文第一行当标题（见 core 的 `autoTitlePath`）。
+   */
+  allowEmpty?: boolean
   /** 输入框下面再塞点东西（下拉框、日期），加里程碑时要用 */
   extra?: ReactNode
   onConfirm(value: string): void
@@ -35,6 +43,7 @@ export function PromptModal({
   placeholder,
   initial = '',
   confirmText = '确定',
+  allowEmpty = false,
   extra,
   onConfirm,
   onCancel,
@@ -49,7 +58,7 @@ export function PromptModal({
 
   const submit = () => {
     const v = value.trim()
-    if (v) onConfirm(v)
+    if (v || allowEmpty) onConfirm(v)
   }
 
   return (
@@ -68,7 +77,7 @@ export function PromptModal({
         <button className="btn" onClick={onCancel}>
           取消
         </button>
-        <button className="btn btn-primary" onClick={submit} disabled={!value.trim()}>
+        <button className="btn btn-primary" onClick={submit} disabled={!value.trim() && !allowEmpty}>
           {confirmText}
         </button>
       </div>
