@@ -9,10 +9,11 @@
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import * as path from 'node:path'
-import { writeFileSync } from 'node:fs'
+import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import { loadConfig, patchConfig, type ThemeSlot } from './config.js'
 import { canAdd, putSlot, removeSlot, normalizeSlots } from '../shared/theme-slots.js'
+import { addRoot, indexFileName, removeRoot, sameRoot } from '../shared/roots.js'
 import { Workspace } from './workspace.js'
 import { isWritableDir } from '../storage/local-fs.js'
 import { makeSmokeRoot, runSmoke } from './smoke.js'
@@ -103,13 +104,54 @@ async function getWorkspace(): Promise<Workspace> {
   if (workspace) return workspace
   const cfg = await loadConfig()
   if (!cfg.root) throw new Error('还没有选择作品根目录')
+  /*
+   * **每个作品库一份索引**（`indexFileName`，规矩写在 shared/roots.ts）。
+   *
+   * 索引里的路径是相对作品库的，两个库共用一份的话，只要两边有同名的书，
+   * 记录就会互相覆盖 —— 表现是在这个库里搜，搜出另一个库的句子，
+   * 点进去还打不开。
+   */
   workspace = new Workspace(
     cfg.root,
     cfg.deviceId,
-    path.join(app.getPath('userData'), 'index.db'),
+    path.join(app.getPath('userData'), indexFileName(cfg.root)),
     cfg.deviceName || cfg.deviceId,
   )
+  dropLegacyIndex()
   return workspace
+}
+
+/**
+ * 0.5 以前全局只有一份 `index.db`，现在按库拆开了，那一份再也不会被读。
+ *
+ * 索引是派生物（铁律三：删掉重扫就能完全复原），所以直接删 ——
+ * 留着只是在 %APPDATA% 里白占几十兆，而且会让以后查问题的人以为它还有用。
+ */
+function dropLegacyIndex(): void {
+  const legacy = path.join(app.getPath('userData'), 'index.db')
+  try {
+    if (existsSync(legacy)) {
+      rmSync(legacy, { force: true })
+      console.log('[bugu] 删掉了旧的全局索引 index.db（已按作品库拆开，它不会再被读）')
+    }
+  } catch (e) {
+    console.error('[bugu] 删旧索引失败（不影响使用）:', e)
+  }
+}
+
+/**
+ * 换库之前把手里这个工作区关掉。
+ *
+ * 不关的话 sqlite 的句柄一直攥着：换几次就攒几个，而且在 Windows 上
+ * 攥着的那份索引文件删不掉 —— 以后想重建索引会失败，还查不出原因。
+ */
+function dropWorkspace(): void {
+  try {
+    workspace?.close()
+  } catch (e) {
+    console.error('[bugu] 关闭工作区失败:', e)
+  }
+  workspace = null
 }
 
 function createWindow(): BrowserWindow {
@@ -160,7 +202,7 @@ function createWindow(): BrowserWindow {
   if (devUrl) void win.loadURL(devUrl)
   else void win.loadFile(path.join(here, '../renderer/index.html'))
 
-  if (SMOKE) runSmoke(win, smokeRoot as string)
+  if (SMOKE) runSmoke(win, smokeRoot as string, smokeRoot2 ? [smokeRoot2] : [])
 
   return win
 }
@@ -190,9 +232,53 @@ function registerIpc(): void {
     if (r.canceled || r.filePaths.length === 0) return null
     const picked = r.filePaths[0] as string
     if (!(await isWritableDir(picked))) throw new Error('这个目录没有写权限，换一个吧')
-    await patchConfig({ root: picked })
-    workspace = null // 换了根目录，工作区要重建
+    const cfg = await loadConfig()
+    // 挑过的都记着，下次在书架顶栏点一下就能切回来 —— 不用再翻一遍文件夹
+    await patchConfig({ root: picked, roots: addRoot(cfg.roots ?? [], picked) })
+    dropWorkspace() // 换了作品库，工作区和它那份索引都要重开
     return picked
+  })
+
+  /** 认得的作品库有哪些，正在用的是哪个 */
+  handle('listRoots', async () => {
+    const cfg = await loadConfig()
+    return { roots: cfg.roots ?? [], active: cfg.root }
+  })
+
+  /**
+   * 切到另一个作品库。
+   *
+   * 先确认它**现在**还打得开：移动硬盘没插、文件夹被改了名、同步盘还没
+   * 落下来 —— 这三样都很常见。不确认就切的话，作者会看见一个空书架，
+   * 而空书架跟「我的稿子没了」长得一模一样。
+   */
+  handle('switchRoot', async (p: string) => {
+    const cfg = await loadConfig()
+    const target = (cfg.roots ?? []).find((x) => sameRoot(x, p))
+    if (!target) throw new Error('这个作品库不在列表里了')
+    if (!(await isWritableDir(target))) {
+      throw new Error('这个目录现在打不开 —— 可能是移动硬盘没插上，或者文件夹被改了名。')
+    }
+    await patchConfig({ root: target })
+    dropWorkspace()
+    return target
+  })
+
+  /**
+   * 不再记着某个作品库。
+   *
+   * ⚠️ **一个文件都不删**，只是从这一排里去掉。想找回来就再「添加一个目录」。
+   * 正在用的那个不许移除：移掉之后界面就没有当前库了，
+   * 那种半截状态没有任何好处。
+   */
+  handle('forgetRoot', async (p: string) => {
+    const cfg = await loadConfig()
+    if (cfg.root && sameRoot(cfg.root, p)) {
+      throw new Error('这是正在用的作品库，先切到别的再移除它。')
+    }
+    const roots = removeRoot(cfg.roots ?? [], p)
+    await patchConfig({ roots })
+    return roots
   })
 
   handle('listBooks', async () => (await getWorkspace()).listBooks())
@@ -963,6 +1049,15 @@ function registerIpc(): void {
 
 /** 冒烟模式下用的临时作品根目录 */
 let smokeRoot: string | null = null
+/**
+ * 冒烟用的**第二个**作品库。
+ *
+ * 「在不同的目录间切换」这条路只有两个库才验得了，而界面上添加一个库
+ * 走的是系统选目录对话框 —— 自动化点不了它。所以在这儿先备好第二个，
+ * 冒烟脚本就能拿 `switchRoot` 真切一趟：切过去是空书架、在那边建一本、
+ * 切回来原来那本还在。
+ */
+let smokeRoot2: string | null = null
 
 // 冒烟模式必须整个跑在临时目录里 —— 包括**配置目录**。
 // 否则跑一次冒烟就会把作者真实的设置（作品根目录、AI 配置）覆盖掉，
@@ -984,7 +1079,8 @@ void app.whenReady().then(async () => {
   if (SMOKE) {
     // 冒烟跑在临时目录里，绝不碰作者真实的作品文件夹
     smokeRoot = makeSmokeRoot()
-    await patchConfig({ root: smokeRoot })
+    smokeRoot2 = makeSmokeRoot()
+    await patchConfig({ root: smokeRoot, roots: [smokeRoot, smokeRoot2] })
     workspace = null
   }
   registerIpc()

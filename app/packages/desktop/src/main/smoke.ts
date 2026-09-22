@@ -1016,6 +1016,33 @@ const E2E_SCRIPT = `(async () => {
     const seed = await api.createChapter(book.rootPath + '/正文', '冲突试验章')
     await api.saveDoc(seed.path, '正本写的是这一句。' + String.fromCharCode(10, 10) + '第二段两边一样。')
 
+    // ── 作品库：在两个目录之间切 ──
+    //
+    // 作者要的：「使不咕鸟可以导入多个目录，并在不同的目录间切换。」
+    //
+    // 这条路只有真切一趟才验得了，而它错了的样子是最吓人的那一种：
+    // 切过去、或者切回来之后书架是空的 —— 跟「我的稿子没了」长得一模一样。
+    // （第二个库是启动时备好的，见 index.ts 的 smokeRoot2 ——
+    //  界面上添加一个库走的是系统选目录对话框，自动化点不了它。）
+    var libs = await api.listRoots()
+    check('认得两个作品库', libs.roots.length === 2, '实得 ' + libs.roots.length + ' 个')
+    var others = libs.roots.filter(function (p) { return p !== libs.active })
+    var here = (await api.listBooks()).length
+    if (others.length > 0) {
+      await api.switchRoot(others[0])
+      var there = await api.listBooks()
+      check('【关键】切过去，看到的是那个库的书架', there.length === 0, '实得 ' + there.length + ' 本')
+      await api.createBook('另一个库里的书')
+      check('在那个库里建的书，就在那个库里', (await api.listBooks()).length === 1)
+
+      await api.switchRoot(libs.active)
+      var backBooks = await api.listBooks()
+      check('【关键】切回来，原来的书一本不少',
+        backBooks.length === here, '走之前 ' + here + ' 本，回来 ' + backBooks.length + ' 本')
+      var crossed = backBooks.filter(function (b) { return b.meta.title === '另一个库里的书' })
+      check('【关键】另一个库里的书没串到这个库来', crossed.length === 0)
+    }
+
     return { steps, threw: null, bookPath: book.rootPath, seedPath: seed.path }
   } catch (e) {
     return { steps, threw: (e && e.message) ? e.message : String(e) }
@@ -1073,7 +1100,7 @@ const CONFLICT_SCRIPT = (bookPath: string, conflictPath: string) => `(async () =
   }
 })()`
 
-export function runSmoke(win: BrowserWindow, tempRoot: string): void {
+export function runSmoke(win: BrowserWindow, tempRoot: string, alsoRemove: string[] = []): void {
   const problems: string[] = []
   const steps: SmokeReport['steps'] = []
   let done = false
@@ -1107,6 +1134,7 @@ export function runSmoke(win: BrowserWindow, tempRoot: string): void {
     }
     try {
       fs.rmSync(tempRoot, { recursive: true, force: true })
+      for (const p of alsoRemove) fs.rmSync(p, { recursive: true, force: true })
     } catch {
       /* 临时目录清不掉不算失败 */
     }

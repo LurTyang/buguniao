@@ -19,6 +19,9 @@ async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
 const api = {
   getRoot: () => call<string | null>('getRoot'),
   chooseRoot: () => call<string | null>('chooseRoot'),
+  listRoots: () => call<{ roots: string[]; active: string | null }>('listRoots'),
+  switchRoot: (p: string) => call<string>('switchRoot', p),
+  forgetRoot: (p: string) => call<string[]>('forgetRoot', p),
   listBooks: () => call<unknown[]>('listBooks'),
   createBook: (title: string, kind?: string) => call<unknown>('createBook', title, kind),
   loadTree: (p: string) => call<unknown>('loadTree', p),

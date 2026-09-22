@@ -169,7 +169,16 @@ export interface IndexStats {
 }
 
 export interface UserSettings {
+  /** 正在用的那个作品库目录 */
   root: string | null
+  /**
+   * 认得的作品库目录，全部。切换只是换个看的地方，不动任何文件。
+   *
+   * 老配置里没有这一项，迁移会拿 `root` 补上（见 config-migrate 的
+   * `migrateRoots`）—— 但界面这边照样要当它**可能不在**：
+   * 配置是会变老的，而一个 `.map` 就能把整块书架炸白。
+   */
+  roots?: string[]
   deviceId: string
   /** 这台机器叫什么。「在别处改过」的对话框要显示它 */
   deviceName: string
@@ -436,6 +445,12 @@ export interface BuguApi {
   getRoot(): Promise<string | null>
   /** 弹出目录选择框，选中后记住。取消返回 null */
   chooseRoot(): Promise<string | null>
+  /** 认得的作品库有哪些，正在用的是哪个 */
+  listRoots(): Promise<{ roots: string[]; active: string | null }>
+  /** 切到另一个作品库。切之前会确认它现在还打得开 */
+  switchRoot(path: string): Promise<string>
+  /** 不再记着某个作品库。**一个文件都不删**；正在用的那个不许移除 */
+  forgetRoot(path: string): Promise<string[]>
 
   // ── 书架 ──
   listBooks(): Promise<BookSummary[]>

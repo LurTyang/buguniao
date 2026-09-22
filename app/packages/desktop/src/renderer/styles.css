@@ -4822,3 +4822,60 @@ button.links-item:hover {
 .split-drop-cur {
   color: var(--control-text-color);
 }
+
+/* ───────────────────────── 作品库那一排 ─────────────────────────
+   一个作品库 = 一个文件夹，里面摆着若干本书。设置里能切、能移除。
+   移除只是不再记着它，所以那个按钮是幽灵样式，不是危险红 ——
+   红色会让人以为要删文件。 */
+.root-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.root-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--window-border);
+  border-radius: 8px;
+  background: var(--bg-raised);
+}
+
+.root-row.active {
+  border-color: var(--primary-color);
+}
+
+.root-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.root-main b {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.root-cur {
+  font-size: 12px;
+  font-weight: normal;
+  color: var(--primary-color);
+  border: 1px solid var(--primary-color);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+/* 整条路径太长，截断 —— 完整的挂在 title 上，鼠标停一下就有 */
+.root-path {
+  font-size: 12px;
+  color: var(--control-text-color);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

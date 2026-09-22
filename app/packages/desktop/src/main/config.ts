@@ -31,8 +31,18 @@ export { EMPTY_SLOT } from '../shared/theme-slots.js'
 
 export interface UserConfig {
   schemaVersion: number
-  /** 作品根目录的绝对路径（通常在坚果云同步文件夹里）。未设置为 null */
+  /** 正在用的那个作品库目录的绝对路径。未设置为 null */
   root: string | null
+  /**
+   * 认得的作品库目录，全部。`root` 是其中正在用的那一个。
+   *
+   * 稿子不止摆在一处：同步盘里一份、移动硬盘里一份、别人给的一份。
+   * 原来只记一个，换过去之后原来那个路径就没人记得了 ——
+   * 想换回来还得自己再翻一遍文件夹。
+   *
+   * **只是一排路径。** 切换不动任何文件，移除也只是不再记着它。
+   */
+  roots: string[]
   /** 本机的设备标识，用于 .bugu/ 下的分片文件名 */
   deviceId: string
   /**
@@ -210,6 +220,7 @@ export interface UserConfig {
 const DEFAULTS: Omit<UserConfig, 'deviceId'> = {
   schemaVersion: 1,
   root: null,
+  roots: [],
   countMode: 'withPunctuation',
   theme: 'light',
   themeCss: '',

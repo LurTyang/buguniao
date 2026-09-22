@@ -493,13 +493,20 @@ export function SettingsPanel({ settings, onChange, onChangeRoot }: SettingsPane
 
       <Section title="存储">
         <Hint>
-          作品目录：
+          正在用的作品库：
           <br />
           <code className="settings-path">{settings.root ?? '（未设置）'}</code>
         </Hint>
+        {/*
+          这儿只给「添加」。**切换在书架顶栏那个菜单里** ——
+          切库会把手里这本书放下（它是另一个库里的），
+          而在稿纸上写着字的时候，一个按钮把你手里的稿子合上，
+          是最不该发生的事。
+        */}
         <button className="btn" style={{ width: '100%' }} onClick={onChangeRoot}>
-          更换作品目录…
+          添加一个作品库…
         </button>
+        <Hint>认得的作品库有好几个时，回书架点顶栏那个文件夹名就能切。</Hint>
         <Hint>本机标识 <code>{settings.deviceId}</code></Hint>
       </Section>
     </div>

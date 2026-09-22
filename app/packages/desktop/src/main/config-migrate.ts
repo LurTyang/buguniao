@@ -184,6 +184,37 @@ function sameShape(a: Slot[], b: unknown[]): boolean {
  *
  * 返回要盖在配置上的那几项；没什么要改的就是空对象。
  */
+/**
+ * 作品库目录从「一个」变成「一排」。
+ *
+ * 老配置里只有 `root`，把它放进 `roots` 里就是了 —— 升级上来的人
+ * 打开软件时，那一排里正好有他一直在用的那个目录，什么都不会少。
+ *
+ * 顺带收拾两种歪掉的形状：`roots` 里混进了非字符串，
+ * 或者当前这个 `root` 不在那一排里（配置被手改过、或者两台机器
+ * 来回同步过一份配置）—— 后者会让书架顶栏那一排缺一个正在用的，
+ * 看着像「我现在这个库不见了」。
+ *
+ * 返回 null = 形状本来就对，不用写盘。**这一条必须有**：
+ * 每次启动都 patch 一遍配置就是每次启动都白写一次盘。
+ */
+export function migrateRoots(raw: Record<string, unknown>): string[] | null {
+  const root = str(raw['root'])
+  const cur = raw['roots']
+
+  if (!Array.isArray(cur)) return root ? [root] : null
+
+  const cleaned: string[] = []
+  for (const x of cur) {
+    const one = str(x)
+    if (one && !cleaned.includes(one)) cleaned.push(one)
+  }
+  if (root && !cleaned.includes(root)) cleaned.push(root)
+
+  const same = cleaned.length === cur.length && cleaned.every((x, i) => x === cur[i])
+  return same ? null : cleaned
+}
+
 export function migrateConfig(raw: Record<string, unknown>): Record<string, unknown> {
   const patch: Record<string, unknown> = {}
 
@@ -199,6 +230,9 @@ export function migrateConfig(raw: Record<string, unknown>): Record<string, unkn
 
   const themes = migrateThemeSlots(raw)
   if (themes) Object.assign(patch, themes)
+
+  const roots = migrateRoots(raw)
+  if (roots) patch['roots'] = roots
 
   return patch
 }

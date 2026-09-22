@@ -10,7 +10,12 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { migrateConfig, migrateSmartRules, migrateThemeSlots } from './config-migrate.js'
+import {
+  migrateConfig,
+  migrateRoots,
+  migrateSmartRules,
+  migrateThemeSlots,
+} from './config-migrate.js'
 
 describe('标点替换规则', () => {
   it('【关键】老的开关对象要被换掉 —— 留着它渲染进程会当场炸', () => {
@@ -142,5 +147,38 @@ describe('整体', () => {
     // 搬完之后 smartRules 绝不能还是个「对象但不是数组」
     const v = patch['smartRules']
     expect(Array.isArray(v) || v === null).toBe(true)
+  })
+})
+
+/**
+ * 作品库目录从「一个」变成「一排」。
+ *
+ * 搬不动的后果：升级上来的人打开软件，书架顶栏那一排里**没有他正在用的那个库**——
+ * 看着就像「我的稿子不见了」。
+ */
+describe('作品库目录这一排', () => {
+  it('老配置只有 root，搬进 roots 里', () => {
+    expect(migrateRoots({ root: 'D:/书' })).toEqual(['D:/书'])
+  })
+
+  it('一个都没有时不写盘', () => {
+    expect(migrateRoots({})).toBeNull()
+  })
+
+  it('【关键】形状本来就对时返回 null —— 不然每次启动都白写一次盘', () => {
+    expect(migrateRoots({ root: 'D:/书', roots: ['D:/书'] })).toBeNull()
+    expect(migrateRoots({ root: 'D:/乙', roots: ['D:/甲', 'D:/乙'] })).toBeNull()
+  })
+
+  it('【关键】正在用的那个不在排里就补上 —— 缺了它看着像「我的库不见了」', () => {
+    expect(migrateRoots({ root: 'D:/丙', roots: ['D:/甲'] })).toEqual(['D:/甲', 'D:/丙'])
+  })
+
+  it('混进来的怪东西丢掉', () => {
+    expect(migrateRoots({ root: '', roots: ['D:/甲', 3, null, '', 'D:/甲'] })).toEqual(['D:/甲'])
+  })
+
+  it('不是数组就当没有', () => {
+    expect(migrateRoots({ root: 'D:/书', roots: { a: 1 } })).toEqual(['D:/书'])
   })
 })

@@ -12,6 +12,7 @@ import { UserRail } from './UserRail.js'
 import { SettingsHome } from './SettingsHome.js'
 import { ConfirmModal, FormModal, PromptModal } from './Modal.js'
 import { useContextMenu, type MenuItem } from './ContextMenu.js'
+import { rootName, sameRoot } from '../../shared/roots.js'
 import { PinIcon } from './Sidebar.js'
 
 /** 三种状态的显示名。「坑啦！哈哈」是作者定的，别改成「已搁置」那种正经词 */
@@ -57,16 +58,34 @@ type Dialog =
   | null
 
 export interface ShelfProps {
+  /** 正在用的那个作品库 */
   root: string
+  /** 认得的作品库，全部。顶栏那个菜单就是它 */
+  roots: string[]
   onOpen(book: BookSummary): void
+  /** 挑一个新目录进来（挑完就切过去） */
   onChangeRoot(): void
+  /** 切到另一个已经认得的作品库 */
+  onSwitchRoot(path: string): void
+  /** 不再记着某个作品库。一个文件都不删 */
+  onForgetRoot(path: string): void
   /** 由菜单「新建作品」触发 */
   createSignal?: number
   settings: UserSettings
   onSettings(patch: Partial<UserSettings>): void
 }
 
-export function Shelf({ root, onOpen, onChangeRoot, createSignal, settings, onSettings }: ShelfProps) {
+export function Shelf({
+  root,
+  roots,
+  onOpen,
+  onChangeRoot,
+  onSwitchRoot,
+  onForgetRoot,
+  createSignal,
+  settings,
+  onSettings,
+}: ShelfProps) {
   const [books, setBooks] = useState<BookSummary[] | null>(null)
   const [covers, setCovers] = useState<Record<string, string>>({})
   const [filter, setFilter] = useState<'all' | BookStatus>('all')
@@ -76,6 +95,37 @@ export function Shelf({ root, onOpen, onChangeRoot, createSignal, settings, onSe
   /** 灵感箱里攒了多少条还没归到书里去 */
   const [ideaCount, setIdeaCount] = useState(0)
   const ctx = useContextMenu()
+
+  /**
+   * 顶栏那个作品库菜单：认得的都摆出来，点一下就切过去。
+   *
+   * ─────────────────────────────────────────────────────────────
+   * 作者要的：「使不咕鸟可以导入多个目录，并在不同的目录间切换。」
+   *
+   * 原来这儿只有一个「更换目录」—— 换过去之后，原来那个路径就没人
+   * 记得了，想换回来还得自己再翻一遍文件夹。现在挑过的都记着。
+   *
+   * **菜单从按钮下沿拉开**，不是从鼠标点的那一点：它是个按钮，
+   * 它的菜单该像所有下拉菜单一样挂在按钮底下 —— 跟着鼠标走的话，
+   * 同一个按钮点两次菜单出现在两个地方。
+   * ─────────────────────────────────────────────────────────────
+   */
+  const openLibMenu = (el: HTMLElement) => {
+    // 配置会变老：roots 可能还没迁移过来。空的时候至少把当前这个摆出来，
+    // 不然菜单里一个库都没有，看着像「我的库不见了」
+    const known = roots.length > 0 ? roots : [root]
+    const r = el.getBoundingClientRect()
+    const items: MenuItem[] = known.map((p) => ({
+      // 正在用的那个打勾并且点不动 —— 切到自己身上是个空动作，
+      // 而一个点了没反应的菜单项会让人以为软件卡了
+      label: `${sameRoot(p, root) ? '✓ ' : '　'}${rootName(p)}`,
+      disabled: sameRoot(p, root),
+      onClick: () => onSwitchRoot(p),
+    }))
+    items.push({ label: '添加一个目录…', separatorBefore: true, onClick: onChangeRoot })
+    items.push({ label: '管理作品库…', onClick: () => setSettingsOpen(true) })
+    ctx.open({ clientX: r.left, clientY: r.bottom + 4, preventDefault: () => {} }, items)
+  }
 
   const msg = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -203,8 +253,17 @@ export function Shelf({ root, onOpen, onChangeRoot, createSignal, settings, onSe
           </button>
         ))}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-          <button className="btn-ghost icon-btn" title={root} onClick={onChangeRoot}>
-            更换目录
+          {/*
+            作品库切换。**显示的是文件夹名，不是整条路径** ——
+            整条路径在顶栏这一行放不下，而作者认的本来就是
+            「我那个叫『小说』的文件夹」。完整路径挂在 title 上。
+          */}
+          <button
+            className="btn-ghost icon-btn"
+            title={`当前作品库：${root}`}
+            onClick={(e) => openLibMenu(e.currentTarget)}
+          >
+            {rootName(root)} ▾
           </button>
           <button className="btn btn-primary" onClick={() => setDialog({ kind: 'create' })}>
             新建作品
@@ -376,7 +435,10 @@ export function Shelf({ root, onOpen, onChangeRoot, createSignal, settings, onSe
       {settingsOpen && (
         <SettingsHome
           root={root}
+          roots={roots}
           onChangeRoot={onChangeRoot}
+          onSwitchRoot={onSwitchRoot}
+          onForgetRoot={onForgetRoot}
           onClose={() => setSettingsOpen(false)}
           settings={settings}
           onSettings={onSettings}

@@ -184,18 +184,64 @@ export function App() {
     setTour(which)
   }, [settings, book, help, greeting])
 
+  /**
+   * 把「认得哪些作品库、正在用哪个」从主进程同步回界面。
+   *
+   * 一处算、一处认：这一排的真身在配置文件里，界面只是照着显示。
+   * 两边各记一份的话，加了一个目录而顶栏那一排没变，
+   * 看着就像「加失败了」。
+   */
+  const applyRoots = useCallback(async () => {
+    const r = await api.listRoots()
+    patchSettings({ root: r.active, roots: r.roots })
+  }, [patchSettings])
+
+  /** 挑一个新目录进来（挑完就切过去）。挑过的都会被记住 */
   const chooseRoot = useCallback(async () => {
     try {
       const picked = await api.chooseRoot()
       if (picked) {
         setBook(null)
         setError(null)
-        patchSettings({ root: picked })
+        await applyRoots()
       }
     } catch (e) {
       setError(msg(e))
     }
-  }, [patchSettings])
+  }, [applyRoots])
+
+  /**
+   * 切到另一个作品库。
+   *
+   * ⚠️ **手里开着的那本书要先放手。** 它是上一个库里的 ——
+   * 不放手的话，写作页会对着一个已经不属于当前库的路径接着存盘。
+   */
+  const switchRoot = useCallback(
+    async (p: string) => {
+      try {
+        await api.switchRoot(p)
+        setBook(null)
+        setError(null)
+        await applyRoots()
+      } catch (e) {
+        setError(msg(e))
+      }
+    },
+    [applyRoots],
+  )
+
+  /** 不再记着某个作品库。**一个文件都不删** */
+  const forgetRoot = useCallback(
+    async (p: string) => {
+      try {
+        await api.forgetRoot(p)
+        await applyRoots()
+      } catch (e) {
+        setError(msg(e))
+      }
+    },
+    [applyRoots],
+  )
 
   // 菜单事件（在书架和写作页都要响应的那几个）
   useEffect(() => {
@@ -285,6 +331,9 @@ export function App() {
       <Boom where="书架">
         <Shelf
           root={settings.root}
+          roots={settings.roots ?? []}
+          onSwitchRoot={(p) => void switchRoot(p)}
+          onForgetRoot={(p) => void forgetRoot(p)}
           onOpen={setBook}
           onChangeRoot={() => void chooseRoot()}
           createSignal={createSignal}
