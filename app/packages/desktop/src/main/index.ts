@@ -223,6 +223,10 @@ function registerIpc(): void {
     })
   }
 
+  /** 清单地址：主的排前面，兜底的跟在后面（见 config 里 updateUrlsFallback） */
+  const updateUrls = (cfg: { updateUrl: string; updateUrlsFallback?: string[] }) =>
+    [cfg.updateUrl, ...(cfg.updateUrlsFallback ?? [])].filter(Boolean)
+
   /*
    * ── 自动升级 ──
    *
@@ -232,12 +236,12 @@ function registerIpc(): void {
   handle('checkUpdate', async () => {
     const cfg = await loadConfig()
     if (!cfg.updateCheck) return { found: null, current: app.getVersion(), error: null }
-    return checkUpdate(cfg.updateUrl, app.getVersion(), (await loadAiConfig()).proxy)
+    return checkUpdate(updateUrls(cfg), app.getVersion(), (await loadAiConfig()).proxy)
   })
 
   handle('downloadUpdate', async () => {
     const cfg = await loadConfig()
-    const r = await checkUpdate(cfg.updateUrl, app.getVersion(), (await loadAiConfig()).proxy)
+    const r = await checkUpdate(updateUrls(cfg), app.getVersion(), (await loadAiConfig()).proxy)
     if (!r.found) throw new Error(r.error ?? '没有新版本。')
     const win = BrowserWindow.getAllWindows()[0] ?? null
     let last = 0
@@ -253,7 +257,7 @@ function registerIpc(): void {
 
   handle('installUpdate', async (file: string) => {
     const cfg = await loadConfig()
-    const r = await checkUpdate(cfg.updateUrl, app.getVersion(), (await loadAiConfig()).proxy)
+    const r = await checkUpdate(updateUrls(cfg), app.getVersion(), (await loadAiConfig()).proxy)
     installUpdate(file, r.found?.canInstall ?? !isPortableBuild())
   })
 

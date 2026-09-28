@@ -1,0 +1,17 @@
+{
+  "version": "1.0.0",
+  "name": "被遗忘的旋律",
+  "date": "2026-09-28",
+  "notes": "这一版主要是外观。 功能没怎么加，改的是「东西摆在哪儿、找不找得到」。",
+  "page": "https://github.com/LurTyang/buguniao/releases/tag/v1.0.0",
+  "setup": {
+    "url": "https://github.com/LurTyang/buguniao/releases/download/v1.0.0/buguniao-setup-1.0.0.exe",
+    "size": 104753143,
+    "sha256": "f07a3fb2bc6396ec09006d2f0311eefa5351904be50d5094e07b41fc0d4934bf"
+  },
+  "portable": {
+    "url": "https://github.com/LurTyang/buguniao/releases/download/v1.0.0/buguniao-1.0.0-win-x64.exe",
+    "size": 104568232,
+    "sha256": "16af8e96639e83c1e4be28f60a0190ebaec2c10811cea07a9e4a054b61e1d366"
+  }
+}

@@ -50,6 +50,13 @@ export interface UserConfig {
    */
   updateUrl: string
   /**
+   * 兜底的清单地址（主地址不通时挨着试）。
+   *
+   * 默认里头有一个 GitHub 的 raw ——「作者那台挂了」和「GitHub 连不上」
+   * 是两种不相干的死法，两个都挂的概率比任何一个单独挂小得多。
+   */
+  updateUrlsFallback: string[]
+  /**
    * 侧边栏里那些可以收起的小节，哪些是展开着的。键是小节的 id。
    *
    * 一张自由的表，不是几个写死的布尔值 —— 小节以后还会加（AI 工作台那边
@@ -248,6 +255,7 @@ const DEFAULTS: Omit<UserConfig, 'deviceId'> = {
   sections: {},
   updateCheck: true,
   updateUrl: 'https://bugu.char46.top/dl/latest.json',
+  updateUrlsFallback: ['https://raw.githubusercontent.com/LurTyang/buguniao/main/latest.json'],
   countMode: 'withPunctuation',
   theme: 'light',
   themeCss: '',

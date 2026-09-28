@@ -51,13 +51,38 @@ export function isPortableBuild(env: Record<string, string | undefined> = proces
  * 404 的 HTML、清单字段写坏），而它们的处理方式完全一样：当作没有更新。
  */
 export async function checkUpdate(
-  url: string,
+  urls: readonly string[],
   currentVersion: string,
   proxySetting: string,
   timeoutMs = 8000,
 ): Promise<UpdateCheck> {
+  /*
+   * **一个地址不通就试下一个。**
+   *
+   * 作者那台服务器和 GitHub 各有各的死法：自己那台可能欠费、域名可能到期；
+   * GitHub 的 raw 在国内时常连不上。两个都挂的概率比任何一个单独挂小得多，
+   * 而多试一次的代价只是几 KB。
+   *
+   * 顺序有意义，排在前面的先试。**读到一份能读懂的清单就到此为止** ——
+   * 哪怕它说「没有新版本」：那是答案，不是失败。
+   */
+  let lastError: string | null = null
+  for (const target of urls) {
+    const one = await checkOne(target, currentVersion, proxySetting, timeoutMs)
+    if (one.found || one.error === null) return one
+    lastError = one.error
+  }
+  return { found: null, current: currentVersion, error: lastError ?? '没有可用的更新地址。' }
+}
+
+async function checkOne(
+  target0: string,
+  currentVersion: string,
+  proxySetting: string,
+  timeoutMs: number,
+): Promise<UpdateCheck> {
   const base: UpdateCheck = { found: null, current: currentVersion, error: null }
-  const target = url.trim()
+  const target = target0.trim()
   if (!/^https:\/\//i.test(target)) {
     return { ...base, error: '更新地址得是 https 的。' }
   }
