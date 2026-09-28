@@ -24,7 +24,7 @@ import { ChoiceModal, ConfirmModal, PromptModal } from './Modal.js'
 import { SettingsPanel } from './SettingsPanel.js'
 import type { UserSettings } from '../../shared/api.js'
 import { selectionRect, useContextMenu } from './ContextMenu.js'
-import { OutlineTree, SettingsTree, TextTree, type TreeActions } from './DirectoryTree.js'
+import { DirSection, OutlineTree, SettingsTree, TextTree, type TreeActions } from './DirectoryTree.js'
 import { SearchPanel } from './SearchPanel.js'
 import { StickyLayer, placeNewSticky } from './StickyLayer.js'
 import { isStickyDrag, stickyCardOf } from '../sticky-drag.js'
@@ -166,6 +166,18 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
   useEffect(() => {
     if (!tools.some((t) => t.key === toolTab)) setToolTab('stats')
   }, [tools, toolTab])
+  /**
+   * 侧边栏那些小节展开着没有。
+   *
+   * 记在配置里（按 id），所以关掉软件再打开还是你摆的样子 ——
+   * 一个每次启动都自己张开的面板，等于每天早上替你重新决定一遍看什么。
+   */
+  const sectionOpen = (id: string, def: boolean) => settings.sections?.[id] ?? def
+  const toggleSection = (id: string, def: boolean) =>
+    onSettingsChange({
+      sections: { ...(settings.sections ?? {}), [id]: !sectionOpen(id, def) },
+    })
+
   const [dialog, setDialog] = useState<Dialog>(null)
 
   // ── 便利贴 ──
@@ -973,6 +985,20 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
     () => shownCounts(leftCounts, rightSideCounts, splitMode, focusedPane),
     [leftCounts, rightSideCounts, splitMode, focusedPane],
   )
+  /**
+   * 选中了多少字。没选就是 0。
+   *
+   * 「这一段有多少字」是投稿、切章、控制节奏时天天要问的一件事，
+   * 而原来只能自己数。**只在真选了东西时才出现** ——
+   * 常驻一个「选中 0 字」是纯噪音。
+   *
+   * 只认左半边：选区是从那块稿纸报上来的（右半边没接这条线）。
+   */
+  const selectedChars = useMemo(() => {
+    if (!selection || selection.end <= selection.start) return 0
+    return countWords(body.slice(selection.start, selection.end)).withPunctuation
+  }, [selection, body])
+
   /** 这个数数的是哪一篇，写在数字旁边 —— 一个会跟着光标变的数不说清楚就成了「乱跳」 */
   const countsLabel = countsName(splitMode, focusedPane)
   const countsOnRight = countsSide(splitMode, focusedPane) === 'right'
@@ -1312,34 +1338,43 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
       state={dirBar}
       width={settings.dirBarWidth}
       onResize={(px) => onSettingsChange({ dirBarWidth: px })}
-      head={
-        <>
-          {(
-            [
-              ['outline', '大纲'],
-              ['text', '正文'],
-              ['settings', '设定集'],
-            ] as Array<[DirTab, string]>
-          ).map(([k, label]) => (
-            <button
-              key={k}
-              className={`tab${dirTab === k ? ' active' : ''}`}
-              onClick={() => setDirTab(k)}
-            >
-              {label}
-            </button>
-          ))}
-        </>
-      }
+      head={<span className="sidebar-title">目录</span>}
     >
-      {tree && dirTab === 'text' && (
-        <TextTree tree={tree} activePath={docPath} actions={actions} onMenu={ctx.open} />
-      )}
-      {tree && dirTab === 'outline' && (
-        <OutlineTree tree={tree} activePath={docPath} actions={actions} onMenu={ctx.open} />
-      )}
-      {tree && dirTab === 'settings' && (
-        <SettingsTree tree={tree} activePath={docPath} actions={actions} onMenu={ctx.open} />
+      {/*
+        ── 三块，不是三个页签 ──
+        作者要的：「把左侧『大纲、正文、设定集』这三个按钮优化成一个，
+        即在一个侧边栏里依次有这三项，三个小标题，附有下拉箭头，可以收起。」
+
+        页签一次只看得见一个：照着大纲写正文要来回点，而点走的那一下，
+        你正在看的章节列表就没了。默认只展开「正文」—— 那是你写字的地方；
+        另外两块一点就开，而且可以跟正文同时开着。
+      */}
+      {tree && (
+        <>
+          <DirSection
+            title="大纲"
+            count={tree.outline.length}
+            open={sectionOpen('dir.outline', false)}
+            onToggle={() => toggleSection('dir.outline', false)}
+          >
+            <OutlineTree tree={tree} activePath={docPath} actions={actions} onMenu={ctx.open} />
+          </DirSection>
+          <DirSection
+            title="正文"
+            open={sectionOpen('dir.text', true)}
+            onToggle={() => toggleSection('dir.text', true)}
+          >
+            <TextTree tree={tree} activePath={docPath} actions={actions} onMenu={ctx.open} />
+          </DirSection>
+          <DirSection
+            title="设定集"
+            count={tree.settings.length}
+            open={sectionOpen('dir.settings', false)}
+            onToggle={() => toggleSection('dir.settings', false)}
+          >
+            <SettingsTree tree={tree} activePath={docPath} actions={actions} onMenu={ctx.open} />
+          </DirSection>
+        </>
       )}
     </Sidebar>
   )
@@ -1353,20 +1388,43 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
     >
       {splitDrop}
       <div className="panel-list">
-        {tools.map((t) => (
-          <button
-            key={t.key}
-            className={`panel-item${toolTab === t.key ? ' active' : ''}`}
-            onClick={() => {
-              // 「导入 / 导出」是个弹窗，不是面板：切过去会显示一片空白
-              if (t.key === 'transfer') setTransfer('export')
-              else setToolTab(t.key)
-            }}
-          >
-            <span>{t.label}</span>
-            {!t.done && <span className="todo">未做</span>}
-          </button>
-        ))}
+        {TOOL_GROUPS.map((g) => {
+          // 按组里写的顺序取，不按 TOOLS 的顺序 —— 那一排的次序是作者定的
+          const items = g.keys
+            .map((k) => tools.find((t) => t.key === k))
+            .filter((t): t is (typeof TOOLS)[number] => !!t)
+          if (items.length === 0) return null
+          return (
+            <DirSection
+              key={g.id}
+              title={g.label}
+              open={sectionOpen(g.id, g.open)}
+              onToggle={() => toggleSection(g.id, g.open)}
+            >
+              {items.map((t) => (
+                <button
+                  key={t.key}
+                  className={`panel-item${toolTab === t.key ? ' active' : ''}`}
+                  onClick={() => {
+                    // 「导入 / 导出」是个弹窗，不是面板：切过去会显示一片空白
+                    if (t.key === 'transfer') setTransfer('export')
+                    else setToolTab(t.key)
+                  }}
+                >
+                  <span>{t.label}</span>
+                  {!t.done && <span className="todo">未做</span>}
+                </button>
+              ))}
+            </DirSection>
+          )
+        })}
+        {/* 设置单独摆最底下：人找设置是按位置找的，不该藏进某一堆里 */}
+        <button
+          className={`panel-item panel-item-alone${toolTab === 'settings' ? ' active' : ''}`}
+          onClick={() => setToolTab('settings')}
+        >
+          <span>设置</span>
+        </button>
       </div>
       <div style={{ borderTop: '1px solid var(--window-border)', marginTop: 6 }}>
         {toolTab === 'stats' ? (
@@ -1601,6 +1659,11 @@ export function Work({ book, onBack, settings, onSettingsChange, onChangeRoot }:
               onClick={() => setSession(EMPTY_SESSION)}
             >
               {sessionText}
+            </span>
+          )}
+          {selectedChars > 0 && (
+            <span className="topbar-sel" title="选中这一段有多少字（含标点）">
+              选中 {formatCount(selectedChars)}
             </span>
           )}
           {today && (
@@ -2126,6 +2189,32 @@ const SAVE_HINT: Record<string, string> = {
  *   删掉的章节就该在这本书里捞。
  * ─────────────────────────────────────────────────────────────
  */
+/**
+ * 功能栏那一排怎么分堆。
+ *
+ * ─────────────────────────────────────────────────────────────
+ * 作者定的：「字数统计、里程碑、全文检索合并为『文本』，
+ * 伏笔、关联、灵感箱合并为『大纲』，
+ * 番茄钟、AI 助手、版本历史、回收站合并为『小工具』。」
+ *
+ * 原来是十四个按钮平铺，找一个要扫一遍 —— 而这十四个里头，
+ * 每天要点的其实只有两三个。分三堆之后默认只展开「文本」，
+ * 另外两堆一点就开。
+ *
+ * 另外三项没进堆，各有理由：
+ *   · **设置**单独摆在最底下 —— 人找设置是按位置找的，不该藏在某一堆里
+ *   · **剧本模式 / 游戏剧本**归「文本」：它们问的是「这稿子写成什么样了」
+ *     （谁的戏多、有没有断头路），跟字数统计是同一类。而且只有对应
+ *     体裁的书才出现，平时根本不在。
+ *   · **导入 / 导出**归「小工具」：它是个弹窗，一年用几次
+ * ─────────────────────────────────────────────────────────────
+ */
+const TOOL_GROUPS: Array<{ id: string; label: string; open: boolean; keys: ToolTab[] }> = [
+  { id: 'tool.text', label: '文本', open: true, keys: ['stats', 'milestone', 'search', 'script', 'game'] },
+  { id: 'tool.outline', label: '大纲', open: false, keys: ['foreshadow', 'links', 'ideas'] },
+  { id: 'tool.misc', label: '小工具', open: false, keys: ['pomodoro', 'ai', 'history', 'trash', 'transfer'] },
+]
+
 const TOOLS: Array<{ key: ToolTab; label: string; done: boolean; kinds?: BookKind[] }> = [
   { key: 'stats', label: '字数统计', done: true },
   { key: 'search', label: '全文检索', done: true },

@@ -285,6 +285,16 @@ export class Workspace {
     return this.index.backlinks(target, book)
   }
 
+  /** 书架卡片上那两行：每本书多少字、上次什么时候动的 */
+  shelfStats() {
+    return this.index.bookStats()
+  }
+
+  /** 书架上「最近编辑」那几行 */
+  recentDocs(limit?: number) {
+    return this.index.recentDocs(limit)
+  }
+
   indexStats(book?: string) {
     return this.index.stats(book)
   }

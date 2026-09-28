@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 
-function Mask({ children, onCancel }: { children: ReactNode; onCancel(): void }) {
+/**
+ * 弹窗的底子：一层遮罩 + 中间那个框。Esc 和点空白处都关。
+ *
+ * 导出是给「内容不是一两个输入框」的弹窗用的（比如 IF 的写作设置表单）——
+ * 它们各自长得不一样，但**关掉的方式必须一模一样**：
+ * 一个 Esc 关不掉的弹窗，比多点一下更让人火。
+ */
+export function Mask({ children, onCancel }: { children: ReactNode; onCancel(): void }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onCancel()
     window.addEventListener('keydown', onKey)

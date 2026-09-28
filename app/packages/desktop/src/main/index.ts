@@ -1028,6 +1028,8 @@ function registerIpc(): void {
   handle('rebuildIndex', async (b: string) => (await getWorkspace()).syncIndex(b, { force: true }))
   handle('search', async (q: string, o?: any) => (await getWorkspace()).search(q, o ?? {}))
   handle('indexStats', async (b?: string) => (await getWorkspace()).indexStats(b))
+  handle('shelfStats', async () => (await getWorkspace()).shelfStats())
+  handle('recentDocs', async (n?: number) => (await getWorkspace()).recentDocs(n))
 
   handle('statsReport', async (b: string, o?: any) => (await getWorkspace()).statsReport(b, o ?? {}))
   handle('setPomodoro', async (active: boolean) => {

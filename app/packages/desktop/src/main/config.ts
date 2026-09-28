@@ -34,6 +34,14 @@ export interface UserConfig {
   /** 正在用的那个作品库目录的绝对路径。未设置为 null */
   root: string | null
   /**
+   * 侧边栏里那些可以收起的小节，哪些是展开着的。键是小节的 id。
+   *
+   * 一张自由的表，不是几个写死的布尔值 —— 小节以后还会加（AI 工作台那边
+   * 还有一排），每加一个就往配置里加一个字段，等于每次都要改迁移。
+   * 表里没有那个键时，各小节自己认一个默认值。
+   */
+  sections: Record<string, boolean>
+  /**
    * 认得的作品库目录，全部。`root` 是其中正在用的那一个。
    *
    * 稿子不止摆在一处：同步盘里一份、移动硬盘里一份、别人给的一份。
@@ -221,6 +229,7 @@ const DEFAULTS: Omit<UserConfig, 'deviceId'> = {
   schemaVersion: 1,
   root: null,
   roots: [],
+  sections: {},
   countMode: 'withPunctuation',
   theme: 'light',
   themeCss: '',

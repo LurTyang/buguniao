@@ -20,6 +20,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api.js'
+import { todaySay } from '../say.js'
 import { PromptModal } from './Modal.js'
 import { AwardBadge } from './AwardBadge.js'
 
@@ -56,6 +57,7 @@ export function UserRail({ onOpenSettings }: { onOpenSettings(): void }) {
 
   const t = r.todayTarget
   const pct = t.floor <= 0 ? 0 : Math.min(100, Math.round((r.todayWords / t.floor) * 100))
+  const say = todaySay({ words: r.todayWords, floor: t.floor, ideal: t.ideal })
 
   return (
     <div className="user-rail">
@@ -90,6 +92,13 @@ export function UserRail({ onOpenSettings }: { onOpenSettings(): void }) {
             <span className="plan-bar-fill floor" style={{ width: `${pct}%` }} />
           </div>
         )}
+        {/*
+          进度条底下那句话。**只报事实，不催也不夸张** ——
+          连胜断了那儿写的是「上次连了 N 天」，这儿照同一个调子来。
+          「就差 150 字」那一档是有意的：还差一点的时候，人多半会
+          把它写完，而这一句正是那一下的推力。规矩在 say.ts。
+        */}
+        {say && <div className="user-say">{say}</div>}
       </div>
 
       <div className="user-block">

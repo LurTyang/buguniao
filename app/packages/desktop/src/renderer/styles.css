@@ -4879,3 +4879,135 @@ button.links-item:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ───────── 书架卡片上的两个数、最近编辑、选中字数、今日那句话 ─────────
+   都是「一眼就能用上的信息」，所以全部做小、做淡：
+   它们要能被扫到，但不能跟书名、章节名抢。 */
+.book-numbers {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12px;
+  color: var(--control-text-color);
+  margin-top: 2px;
+}
+
+.recent {
+  margin: 18px 0 8px;
+}
+
+.recent-title {
+  font-size: 13px;
+  color: var(--control-text-color);
+  margin-bottom: 6px;
+}
+
+/* 一行一篇：篇名在前，书名在后，时间靠右。
+   篇名在前是因为人记得的是「昨天写的那一章」，不是书名 */
+.recent-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  color: var(--text-color);
+}
+
+.recent-row:hover {
+  background: var(--item-hover-bg-color);
+}
+
+.recent-doc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40%;
+}
+
+.recent-when {
+  margin-left: auto;
+  font-size: 12px;
+}
+
+/* 选中字数：只在真选了东西时出现，所以不占固定宽度 */
+.topbar-sel {
+  color: var(--primary-color);
+}
+
+/* 今日进度底下那句话 */
+.user-say {
+  font-size: 12px;
+  color: var(--control-text-color);
+  margin-top: 4px;
+}
+
+/* ───────────────── 侧边栏里那些可收起的小节 ─────────────────
+   目录（大纲 / 正文 / 设定集）和功能栏（文本 / 大纲 / 小工具）用同一套。
+   小标题做得比条目**淡而小**：它是分隔，不是内容。 */
+.dir-section {
+  border-bottom: 1px solid var(--window-border);
+}
+
+.dir-section:last-child {
+  border-bottom: none;
+}
+
+.dir-section-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--control-text-color);
+  text-align: left;
+}
+
+.dir-section-head:hover {
+  background: var(--item-hover-bg-color);
+}
+
+.dir-section-head .name {
+  font-weight: 600;
+}
+
+/* 展开的那一块，标题颜色跟着实一点 —— 一眼看出现在摊开的是哪几块 */
+.dir-section.open > .dir-section-head {
+  color: var(--text-color);
+}
+
+.dir-section-body {
+  padding-bottom: 6px;
+}
+
+/* 箭头：收起时指右，展开时指下。跟条目左侧对齐，不跳 */
+.dir-section-head .tree-caret {
+  width: 12px;
+  display: inline-block;
+  text-align: center;
+  font-size: 10px;
+}
+
+/* 不在任何一堆里的那一项（设置） */
+.panel-item-alone {
+  margin-top: 4px;
+  border-top: 1px solid var(--window-border);
+}
+
+.sidebar-title {
+  font-size: 12px;
+  color: var(--control-text-color);
+  padding: 0 6px;
+}

@@ -22,6 +22,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import type { BookStat, RecentDoc } from '../shared/api.js'
 import {
   countWords,
   flattenChapters,
@@ -395,6 +396,54 @@ export class IndexDb {
       mtime: number
     }>
     return new Map(rows.map((r) => [r.path, r.mtime]))
+  }
+
+  /**
+   * 每本书的字数与最后改动时间 —— 书架卡片上那两行。
+   *
+   * 一次查完所有书，不是一本一本问：书架上有二十本的时候，
+   * 二十次 IPC 会让书架**肉眼可见地一格一格亮起来**。
+   *
+   * 只数正文（`type='chapter'`）。书架上问的是「这本书写了多少」，
+   * 把大纲和设定集算进去，那个数就不再是能拿去跟别人说的字数了。
+   */
+  bookStats(): BookStat[] {
+    const rows = this.db
+      .prepare(
+        `SELECT book,
+                SUM(CASE WHEN type = 'chapter' THEN chars ELSE 0 END) AS chars,
+                MAX(mtime) AS mtime
+         FROM docs GROUP BY book`,
+      )
+      .all() as Array<Record<string, unknown>>
+    return rows.map((r) => ({
+      book: String(r['book']),
+      chars: Number(r['chars'] ?? 0),
+      mtime: Number(r['mtime'] ?? 0),
+    }))
+  }
+
+  /**
+   * 最近改过的几篇，跨作品。书架上那个「最近编辑」。
+   *
+   * 打开软件的第一件事是「接着写哪一篇」—— 而那一篇的名字，
+   * 人多半记不住，只记得「昨天写的那个」。所以按时间排，不按书排。
+   */
+  recentDocs(limit = 6): RecentDoc[] {
+    const rows = this.db
+      .prepare(
+        `SELECT book, path, title, type, mtime FROM docs
+         WHERE type = 'chapter' AND mtime > 0
+         ORDER BY mtime DESC LIMIT ?`,
+      )
+      .all(limit) as Array<Record<string, unknown>>
+    return rows.map((r) => ({
+      book: String(r['book']),
+      path: String(r['path']),
+      title: String(r['title'] ?? ''),
+      type: String(r['type']) as DocType,
+      mtime: Number(r['mtime'] ?? 0),
+    }))
   }
 
   stats(book?: string): IndexStats {

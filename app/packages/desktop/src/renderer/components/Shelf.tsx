@@ -13,6 +13,8 @@ import { SettingsHome } from './SettingsHome.js'
 import { ConfirmModal, FormModal, PromptModal } from './Modal.js'
 import { useContextMenu, type MenuItem } from './ContextMenu.js'
 import { rootName, sameRoot } from '../../shared/roots.js'
+import { agoText, charsText } from '../say.js'
+import type { BookStat, RecentDoc } from '../../shared/api.js'
 import { PinIcon } from './Sidebar.js'
 
 /** 三种状态的显示名。「坑啦！哈哈」是作者定的，别改成「已搁置」那种正经词 */
@@ -94,6 +96,16 @@ export function Shelf({
   const [settingsOpen, setSettingsOpen] = useState(false)
   /** 灵感箱里攒了多少条还没归到书里去 */
   const [ideaCount, setIdeaCount] = useState(0)
+  /**
+   * 每本书的字数和上次动笔时间。**书架是用来挑今天写哪本的** ——
+   * 「连载中」回答不了这个问题，「12.4 万字 · 3 天前」能。
+   *
+   * 从索引里来，所以是一次查完所有书：一本一本问的话，
+   * 二十本的书架会肉眼可见地一格一格亮起来。
+   */
+  const [stats, setStats] = useState<Record<string, BookStat>>({})
+  /** 最近改过的几篇。打开软件的第一件事是「接着写哪一篇」 */
+  const [recent, setRecent] = useState<RecentDoc[]>([])
   const ctx = useContextMenu()
 
   /**
@@ -129,6 +141,23 @@ export function Shelf({
 
   const msg = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
+  // 相对时间要一个「现在」。每次渲染算一次就够 —— 书架不是秒表
+  const now = Date.now()
+
+  /**
+   * 点「最近编辑」里的一行：开那本书，**并且直接停在那一篇**。
+   *
+   * 借的是现成的「上次在哪儿」（`lastPlace`）—— Work 打开一本书时本来
+   * 就会认它。不另起一条路：另起一条的话，「从书架点进去」和
+   * 「启动时接着写」会变成两套代码，而它们要做的是同一件事。
+   */
+  const openRecent = (r: RecentDoc) => {
+    const b = (books ?? []).find((x) => x.rootPath === r.book)
+    if (!b) return
+    onSettings({ lastPlace: { bookPath: r.book, docPath: r.path, line: 0 } })
+    onOpen(b)
+  }
+
   const refresh = useCallback(async () => {
     try {
       const list = await api.listBooks()
@@ -150,6 +179,26 @@ export function Shelf({
         .listLibraryIdeas()
         .then((xs) => setIdeaCount(xs.length))
         .catch(() => setIdeaCount(0))
+
+      /*
+       * 字数、上次动笔、最近编辑 —— 三样都从索引来，**读不到就当没有**。
+       *
+       * 索引是派生物：刚换过作品库、刚重建过，它可能还是空的。
+       * 那时候卡片上少两行字，而书架照样能用 —— 这一条绝不能反过来，
+       * 让一个装饰性的数字拦住整个书架。
+       */
+      void api
+        .shelfStats()
+        .then((xs) => {
+          const m: Record<string, BookStat> = {}
+          for (const x of xs) m[x.book] = x
+          setStats(m)
+        })
+        .catch(() => setStats({}))
+      void api
+        .recentDocs(5)
+        .then(setRecent)
+        .catch(() => setRecent([]))
     } catch (e) {
       setError(msg(e))
       setBooks([])
@@ -333,8 +382,51 @@ export function Shelf({
                 <span className="book-status">{STATUS_LABEL[b.meta.status]}</span>
                 {b.meta.author && <span style={{ marginLeft: 6 }}>{b.meta.author}</span>}
               </div>
+              {/*
+                字数和上次动笔。索引还没建好时这两样都是空串，
+                那就**整行不画** —— 不留一个空位，也不显示「0 字」
+                （那看着像这本书空了）。
+              */}
+              {(charsText(stats[b.rootPath]?.chars ?? 0) ||
+                agoText(stats[b.rootPath]?.mtime ?? 0, now)) && (
+                <div className="book-numbers">
+                  {charsText(stats[b.rootPath]?.chars ?? 0) && (
+                    <span>{charsText(stats[b.rootPath]?.chars ?? 0)}</span>
+                  )}
+                  {agoText(stats[b.rootPath]?.mtime ?? 0, now) && (
+                    <span className="faint">{agoText(stats[b.rootPath]?.mtime ?? 0, now)}</span>
+                  )}
+                </div>
+              )}
             </div>
           ))}
+        </div>
+      )}
+
+      {/*
+        最近编辑。
+        ─────────────────────────────────────────────────────────
+        打开软件的第一件事是「接着写哪一篇」—— 而那一篇的名字人多半
+        记不住，只记得「昨天写的那个」。所以这一排按**时间**排，
+        不按书排，点一行直接落到那一篇上。
+
+        只在「全部」那一档显示：筛着「完结」的时候还摆一排最近编辑，
+        等于把刚筛掉的东西又端回来。
+      */}
+      {filter === 'all' && recent.length > 0 && (
+        <div className="recent">
+          <div className="recent-title">最近编辑</div>
+          {recent.map((r) => {
+            const b = (books ?? []).find((x) => x.rootPath === r.book)
+            if (!b) return null
+            return (
+              <button key={r.path} className="recent-row" onClick={() => openRecent(r)}>
+                <span className="recent-doc">{r.title}</span>
+                <span className="faint">{b.meta.title}</span>
+                <span className="faint recent-when">{agoText(r.mtime, now)}</span>
+              </button>
+            )
+          })}
         </div>
       )}
 

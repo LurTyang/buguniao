@@ -1016,6 +1016,20 @@ const E2E_SCRIPT = `(async () => {
     const seed = await api.createChapter(book.rootPath + '/正文', '冲突试验章')
     await api.saveDoc(seed.path, '正本写的是这一句。' + String.fromCharCode(10, 10) + '第二段两边一样。')
 
+    // ── 书架上那两个数：字数、上次动笔、最近编辑 ──
+    //
+    // 三样都是新写的 SQL，而它们错了的样子很安静：卡片上少一行、
+    // 「最近编辑」是空的 —— 看着像「这个功能没做」，不像出错。
+    var bs = await api.shelfStats()
+    var mine = bs.filter(function (x) { return x.book === book.rootPath })[0]
+    check('书架拿得到这本书的字数', !!mine && mine.chars > 0, JSON.stringify(bs.length) + ' 本')
+    check('也拿得到上次动笔的时间', !!mine && mine.mtime > 0)
+    var rc = await api.recentDocs(5)
+    check('最近编辑拿得到几篇', rc.length > 0, '实得 ' + rc.length + ' 篇')
+    check('【关键】最近编辑按时间倒序 —— 顺序反了就成了「最早编辑」',
+      rc.length < 2 || rc[0].mtime >= rc[1].mtime)
+    check('最近编辑只给正文', rc.every(function (x) { return x.type === 'chapter' }))
+
     // ── 作品库：在两个目录之间切 ──
     //
     // 作者要的：「使不咕鸟可以导入多个目录，并在不同的目录间切换。」
@@ -1046,6 +1060,123 @@ const E2E_SCRIPT = `(async () => {
     return { steps, threw: null, bookPath: book.rootPath, seedPath: seed.path }
   } catch (e) {
     return { steps, threw: (e && e.message) ? e.message : String(e) }
+  }
+})()`
+
+/**
+ * 侧边栏那几块（1.0「被遗忘的旋律」）。
+ *
+ * ⚠️ **单独一段脚本，而且必须在书打开之后、目录栏钉住之后跑。**
+ *
+ * 目录那一栏没钉住时整个不在 DOM 里（Sidebar 里那句 if (!state.visible) return null）。
+ * 而「钉住」这个状态只有界面自己改得动 —— 从脚本里调 updateSettings 只写配置文件，
+ * 界面那半边不会跟着动（它的设置是启动时读进 React 状态的）。
+ * 所以钉住走**菜单事件**，由主进程在这段脚本之前发一次，
+ * 而菜单的监听装在 Work 里 —— 也就是说书必须先打开。
+ *
+ * 前面栽过三次，都栽在这上头：报出来是「目录那三块不见了」，而产品是好的。
+ */
+const SECTION_SCRIPT = `(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+  try {
+  /*
+   * ── 侧边栏那几块（1.0「被遗忘的旋律」）──
+   *
+   * 作者要的两件事：三个页签并成一个侧栏里的三块小标题、
+   * 以及「确保目前设定集中的下拉箭头可以生效」。
+   *
+   * 后一件正是这一步的重点：那个 ▾ 以前是**画上去的**，点了不动。
+   * 而「点了不动」这种坏法在界面上看不出来 —— 它长得跟「已经展开」
+   * 一模一样。所以得真点一下，再数数卡片是不是少了。
+   */
+  var sectionBits = 'no-section'
+  /*
+   * 目录那一栏**在启动时就钉住了**（见 index.ts 里冒烟那段 patchConfig）。
+   *
+   * 非钉不可：没钉住、鼠标又不在那一侧时，它整个不在 DOM 里
+   * （Sidebar 里那句 if (!state.visible) return null）——
+   * 那时候只找得到功能栏那三堆，报出来是「目录那三块不见了」，
+   * 而产品是好的。
+   *
+   * 钉住走配置、不在脚本里模拟鼠标滑出：滑出靠两个定时器（160ms 滑出、
+   * 还有一个隐藏计时），机器忙的时候就是下一颗假红的雷。
+   */
+  var heads = function () { return Array.prototype.slice.call(document.querySelectorAll('.dir-section-head')) }
+  var headNamed = function (name) {
+    return heads().filter(function (e) { return (e.innerText || '').indexOf(name) > -1 })[0] || null
+  }
+  if (heads().length > 0) {
+    var names = heads().map(function (e) { return (e.innerText || '').replace(/\s+/g, ' ').trim() }).join(',')
+    // 收起「正文」，章节列表该跟着消失
+    var textHead = headNamed('正文')
+    var linesBefore = document.querySelectorAll('.tree-chapter').length
+    if (textHead) { textHead.click(); await sleep(250) }
+    var linesFolded = document.querySelectorAll('.tree-chapter').length
+    if (textHead) { textHead.click(); await sleep(250) }
+    var linesBack = document.querySelectorAll('.tree-chapter').length
+
+    /*
+     * 箭头到底管不管事 —— **拿正文里的卷来验**。
+     *
+     * 卷标题和设定分类走的是同一套（DirectoryTree 里的 useFolded），
+     * 而冒烟这本书**一定有一卷**（E2E 那段建的），设定分类却不一定有 ——
+     * 拿一个可能不存在的东西做判据，测出来的是「这本书没有分类」，
+     * 不是「箭头不管事」。
+     *
+     * 判据两条一起看：箭头翻了（▾→▸），而且这一块里的条目少了。
+     */
+    var textSec = headNamed('正文') ? headNamed('正文').parentElement : null
+    var caretOf = function (el) {
+      var c = el ? el.querySelector('.tree-caret') : null
+      return c ? (c.innerText || '').trim() : ''
+    }
+    var vol = textSec ? textSec.querySelector('.tree-volume') : null
+    var volCaretBefore = caretOf(vol)
+    var inTextBefore = textSec ? textSec.querySelectorAll('.tree-item').length : 0
+    if (vol) { vol.click(); await sleep(300) }
+    var volCaretAfter = caretOf(vol)
+    var inTextAfter = textSec ? textSec.querySelectorAll('.tree-item').length : 0
+    if (vol) { vol.click(); await sleep(250) }
+
+    // 设定集那一块：展开它，有分类就也点一下（这本书没分类时不硬凑判据）
+    var setHead = headNamed('设定集')
+    if (setHead) { setHead.click(); await sleep(400) }
+    var secEl = setHead ? setHead.parentElement : null
+    var cat = secEl ? secEl.querySelector('.tree-volume') : null
+    var caretBefore = caretOf(cat)
+    var inSecBefore = secEl ? secEl.querySelectorAll('.tree-item').length : 0
+    if (cat) { cat.click(); await sleep(300) }
+    var caretAfter = caretOf(cat)
+    var inSecAfter = secEl ? secEl.querySelectorAll('.tree-item').length : 0
+
+    sectionBits = JSON.stringify({
+      names: names,
+      // 诊断用：目录那一栏到底渲染出来没有
+      sidebars: document.querySelectorAll('.sidebar').length,
+      titles: Array.prototype.slice.call(document.querySelectorAll('.sidebar-title'))
+        .map(function (e) { return (e.innerText || '').trim() }).join('/'),
+      items: document.querySelectorAll('.tree-item').length,
+      panelItems: document.querySelectorAll('.panel-item').length,
+      linesBefore: linesBefore,
+      linesFolded: linesFolded,
+      linesBack: linesBack,
+      vols: textSec ? textSec.querySelectorAll('.tree-volume').length : 0,
+      volCaretBefore: volCaretBefore,
+      volCaretAfter: volCaretAfter,
+      inTextBefore: inTextBefore,
+      inTextAfter: inTextAfter,
+      cats: secEl ? secEl.querySelectorAll('.tree-volume').length : 0,
+      caretBefore: caretBefore,
+      caretAfter: caretAfter,
+      inSecBefore: inSecBefore,
+      inSecAfter: inSecAfter,
+    })
+  }
+
+
+    return { ok: true, sectionBits: sectionBits }
+  } catch (e) {
+    return { ok: false, sectionBits: 'threw: ' + ((e && e.message) || String(e)) }
   }
 })()`
 
@@ -1486,6 +1617,82 @@ export function runSmoke(win: BrowserWindow, tempRoot: string, alsoRemove: strin
               detail: opened.wrapBits,
             })
 
+            /*
+             * 侧边栏那几块（1.0）。
+             *
+             * 钉住目录栏 → 跑单独那一段 → 再断言。顺序不能换：
+             * 菜单的监听装在 Work 里，书没打开时发过去没人听（栽过一次）。
+             */
+            win.webContents.send('menu:toggle-directory')
+            await new Promise<void>((r) => setTimeout(r, 600))
+            const secRes = (await win.webContents.executeJavaScript(SECTION_SCRIPT)) as {
+              ok: boolean
+              sectionBits: string
+            }
+            let sec: {
+              names?: string
+              linesBefore?: number
+              linesFolded?: number
+              linesBack?: number
+              vols?: number
+              volCaretBefore?: string
+              volCaretAfter?: string
+              inTextBefore?: number
+              inTextAfter?: number
+              cats?: number
+              caretBefore?: string
+              caretAfter?: string
+              inSecBefore?: number
+              inSecAfter?: number
+              sidebars?: number
+            } = {}
+            try {
+              sec = JSON.parse(secRes.sectionBits) as typeof sec
+            } catch {
+              sec = {}
+            }
+            steps.push({
+              name: '目录并成了一个侧栏，三块小标题都在',
+              ok: ['大纲', '正文', '设定集'].every((x) => (sec.names ?? '').includes(x)),
+              detail: secRes.sectionBits,
+            })
+            steps.push({
+              name: '功能栏分成了三堆（文本 / 大纲 / 小工具）',
+              ok: ['文本', '小工具'].every((x) => (sec.names ?? '').includes(x)),
+              detail: sec.names ?? secRes.sectionBits,
+            })
+            steps.push({
+              name: '【关键】收起「正文」，章节列表跟着消失；再点回来又都在',
+              ok:
+                (sec.linesBefore ?? 0) > 0 &&
+                sec.linesFolded === 0 &&
+                sec.linesBack === sec.linesBefore,
+              detail: secRes.sectionBits,
+            })
+            steps.push({
+              name: '【关键】目录里那个箭头真的管事（原来是画上去的）',
+              ok:
+                (sec.vols ?? 0) > 0 &&
+                !!sec.volCaretBefore &&
+                sec.volCaretBefore !== sec.volCaretAfter &&
+                (sec.inTextAfter ?? 99) < (sec.inTextBefore ?? 0),
+              detail: secRes.sectionBits,
+            })
+            steps.push({
+              // 这本书没有设定分类时不硬凑：那测出来的是「没有分类」，不是「箭头不管事」
+              name:
+                (sec.cats ?? 0) > 0
+                  ? '【关键】设定集分类那个箭头也管事'
+                  : '设定集这一块能展开（这本书没有分类，箭头那条跳过）',
+              ok:
+                (sec.cats ?? 0) > 0
+                  ? !!sec.caretBefore &&
+                    sec.caretBefore !== sec.caretAfter &&
+                    (sec.inSecAfter ?? 0) <= (sec.inSecBefore ?? 0)
+                  : !!sec.names && sec.names.includes('设定集'),
+              detail: secRes.sectionBits,
+            })
+
             for (const s of steps) {
               if (!s.ok) problems.push(`步骤失败「${s.name}」${s.detail ? ' —— ' + s.detail : ''}`)
             }
@@ -1531,8 +1738,18 @@ const OPEN_BOOK_SCRIPT = `(async () => {
 
     if (!has('.work')) return { ok: false, classed: 0, bridgeHit: false, focusBits: '', splitBits: '', writeBits: '', dropBits: '', wrapBits: '', detail: '点了之后没有 .work' }
 
-    // 目录树里点开第一篇 —— 进书之后默认可能没打开任何文档
-    var docs = Array.from(document.querySelectorAll('.tree-chapter, .tree-item'))
+    /*
+     * 目录树里点开第一篇 —— 进书之后默认可能没打开任何文档。
+     *
+     * **只点章节，别点卷标题**：卷标题现在点一下是「收起这一卷」
+     * （1.0 起那个 ▾ 是真的了），点它会把章节藏起来，什么都打不开。
+     */
+    var docs = Array.from(document.querySelectorAll('.tree-chapter'))
+    if (docs.length === 0) {
+      docs = Array.from(document.querySelectorAll('.tree-item')).filter(function (e) {
+        return e.className.indexOf('tree-volume') === -1
+      })
+    }
     if (docs.length > 0) { docs[0].click(); await sleep(700) }
 
     // 稿纸这条链上谁在画不透明背景 —— Typora 主题靠 #write 及其
@@ -1715,13 +1932,24 @@ const OPEN_BOOK_SCRIPT = `(async () => {
       if (wNode && wNode.textContent.length >= 2) {
         var picked = wNode.textContent.slice(0, 2)
         wrapCm.focus()
+        /*
+         * 选区要**确认真的落下去了**再打字。
+         *
+         * 机器忙的时候（一边跑着单元测试一边冒烟），CodeMirror 还没把
+         * DOM 选区同步进自己的状态，这一下打出去就变成了「光标处插一个引号」——
+         * 于是这一步报「那段字被顶掉了」，而产品其实是好的。
+         * 假红比不测还糟：它教人忽略红色。
+         */
         var wsel = window.getSelection()
-        var wrng = document.createRange()
-        wrng.setStart(wNode, 0)
-        wrng.setEnd(wNode, 2)
-        wsel.removeAllRanges()
-        wsel.addRange(wrng)
-        await sleep(200)
+        for (var wt = 0; wt < 12; wt++) {
+          var wrng = document.createRange()
+          wrng.setStart(wNode, 0)
+          wrng.setEnd(wNode, 2)
+          wsel.removeAllRanges()
+          wsel.addRange(wrng)
+          await sleep(80)
+          if (!wsel.isCollapsed && wsel.toString().length === 2) break
+        }
         // 单引号写成 fromCharCode：这段脚本整个住在一个模板字符串里，
         // 而 smoke-source.test.ts 会数每一行的引号 —— 奇数就说明有一头没闭上。
         // 那条规矩值钱（少一个引号整段脚本就废了），不为这一处破例
@@ -1802,12 +2030,25 @@ const OPEN_BOOK_SCRIPT = `(async () => {
       var topbar = function () {
         return ((document.querySelector('.topbar-right') || {}).innerText || '').replace(/\s+/g, ' ')
       }
+      /*
+       * 焦点挪过去之后**等顶栏真的变了**再读，不要定死 500 毫秒。
+       *
+       * 定死的等待在机器忙的时候不够用，读到的是上一半的数 ——
+       * 报出来是「字数没跟着光标走」，而产品是好的。
+       */
+      var waitBar = async function (want) {
+        for (var i = 0; i < 16; i++) {
+          if (topbar().indexOf(want) > -1) break
+          await sleep(100)
+        }
+        return topbar()
+      }
       var rightCm = document.querySelector('.side-pane .cm-content')
-      if (rightCm) { rightCm.focus(); await sleep(500) }
-      var onRight = topbar()
+      if (rightCm) rightCm.focus()
+      var onRight = await waitBar('右边')
       var leftCm = document.querySelector('.paper .cm-content')
-      if (leftCm) { leftCm.focus(); await sleep(500) }
-      var onLeft = topbar()
+      if (leftCm) leftCm.focus()
+      var onLeft = await waitBar('本章')
 
       dropBits = JSON.stringify({
         title: ((document.querySelector('.side-title') || {}).innerText || '').trim(),

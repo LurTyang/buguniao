@@ -168,9 +168,33 @@ export interface IndexStats {
   builtAt: number
 }
 
+/** 书架卡片上那两行：这本书有多少字、上次是什么时候动的 */
+export interface BookStat {
+  book: string
+  /** 正文字数。大纲、设定集不算 —— 书架上问的是「这本书写了多少」 */
+  chars: number
+  /** 这本书里最后一次改动的时间（毫秒）。整本书都没索引过时是 0 */
+  mtime: number
+}
+
+/** 「最近编辑」里的一行 */
+export interface RecentDoc {
+  book: string
+  path: string
+  title: string
+  type: DocType
+  mtime: number
+}
+
 export interface UserSettings {
   /** 正在用的那个作品库目录 */
   root: string | null
+  /**
+   * 侧边栏里那些可以收起的小节，哪些是展开着的。键是小节 id。
+   *
+   * 配置会变老，界面这边一律当它**可能不在**：`settings.sections?.[id] ?? 默认值`。
+   */
+  sections?: Record<string, boolean>
   /**
    * 认得的作品库目录，全部。切换只是换个看的地方，不动任何文件。
    *
@@ -454,6 +478,10 @@ export interface BuguApi {
 
   // ── 书架 ──
   listBooks(): Promise<BookSummary[]>
+  /** 每本书的字数与最后改动时间。一次查完所有书 —— 二十本时逐本问会一格一格亮 */
+  shelfStats(): Promise<BookStat[]>
+  /** 最近改过的几篇正文，跨作品，按时间倒序 */
+  recentDocs(limit?: number): Promise<RecentDoc[]>
   /** 新建作品。类型决定套哪份骨架，**只在书架页问一次、只在书架页改** */
   createBook(title: string, kind?: BookKind): Promise<BookSummary>
 
