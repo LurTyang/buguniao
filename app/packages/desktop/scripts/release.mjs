@@ -177,8 +177,20 @@ await writeFile(path.join(releaseDir, 'SHA256SUMS.txt'), lines.join('\n') + '\n'
  * 日志顶上那条跟 package.json 的版本号对不上时**只警告不阻断**：
  * 打包已经成了，这时候拦下来只会让人去改脚本，而不是去写日志。
  */
-const DL_BASE = (process.env['BUGU_DL_BASE'] ?? 'https://bugu.char46.top/dl/').replace(/\/*$/, '/')
 const REPO = 'https://github.com/LurTyang/buguniao'
+/*
+ * 包默认放 GitHub Release 的附件里 —— **默认值要是当下真的通的那条路**。
+ *
+ * 这儿栽过一次：默认写成作者自己那台（`/dl/`），而那儿还什么都没摆，
+ * 于是不带环境变量重跑一次脚本，就悄悄生成了一份指向空地址的清单。
+ * 生成出来的东西不能「看着对但下不到」。
+ *
+ * 想换地方：`BUGU_DL_BASE=https://某处/dl/ pnpm release`。
+ */
+const DL_BASE = (process.env['BUGU_DL_BASE'] ?? `${REPO}/releases/download/v${version}/`).replace(
+  /\/*$/,
+  '/',
+)
 
 /** 从更新日志顶上那条里读出版本号、名字、日期和第一段话 */
 const NL = String.fromCharCode(10)
