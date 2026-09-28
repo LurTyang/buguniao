@@ -42,6 +42,7 @@ import { draftCss, safeFileName, type ThemeDraft } from '../shared/theme-draft.j
 import { FONT_EXTS, fontDataUrl, importFont, removeFont } from './fonts.js'
 import { planFolder, planScrivener } from './foreign.js'
 import { buildAppMenu } from './menu.js'
+import { checkUpdate, downloadUpdate, installUpdate, isPortableBuild } from './update.js'
 import {
   PRESETS,
   accumulateUsage,
@@ -221,6 +222,40 @@ function registerIpc(): void {
       }
     })
   }
+
+  /*
+   * ── 自动升级 ──
+   *
+   * 三条规矩写在 update.ts 的文件头。这儿只做接线，外加一件事：
+   * **下载进度往界面推**，不然一个 100MB 的下载看着就像卡死了。
+   */
+  handle('checkUpdate', async () => {
+    const cfg = await loadConfig()
+    if (!cfg.updateCheck) return { found: null, current: app.getVersion(), error: null }
+    return checkUpdate(cfg.updateUrl, app.getVersion(), (await loadAiConfig()).proxy)
+  })
+
+  handle('downloadUpdate', async () => {
+    const cfg = await loadConfig()
+    const r = await checkUpdate(cfg.updateUrl, app.getVersion(), (await loadAiConfig()).proxy)
+    if (!r.found) throw new Error(r.error ?? '没有新版本。')
+    const win = BrowserWindow.getAllWindows()[0] ?? null
+    let last = 0
+    const file = await downloadUpdate(r.found.asset, (await loadAiConfig()).proxy, (got, total) => {
+      // 一秒最多推四次 —— 每个 chunk 推一次会把 IPC 塞满，界面反而卡
+      const now = Date.now()
+      if (now - last < 250 && got !== total) return
+      last = now
+      win?.webContents.send('update:progress', { got, total })
+    })
+    return { file }
+  })
+
+  handle('installUpdate', async (file: string) => {
+    const cfg = await loadConfig()
+    const r = await checkUpdate(cfg.updateUrl, app.getVersion(), (await loadAiConfig()).proxy)
+    installUpdate(file, r.found?.canInstall ?? !isPortableBuild())
+  })
 
   handle('getRoot', async () => (await loadConfig()).root)
 

@@ -186,9 +186,16 @@ export interface RecentDoc {
   mtime: number
 }
 
+export type { UpdateCheck, UpdateManifest, UpdateAsset } from './update.js'
+import type { UpdateCheck } from './update.js'
+
 export interface UserSettings {
   /** 正在用的那个作品库目录 */
   root: string | null
+  /** 启动时查一下有没有新版本。关掉就一次都不查 */
+  updateCheck?: boolean
+  /** 那份清单在哪儿。下载地址写在清单里，不写在软件里 */
+  updateUrl?: string
   /**
    * 侧边栏里那些可以收起的小节，哪些是展开着的。键是小节 id。
    *
@@ -468,6 +475,17 @@ export interface BuguApi {
   /** 当前的作品根目录；未设置时为 null */
   getRoot(): Promise<string | null>
   /** 弹出目录选择框，选中后记住。取消返回 null */
+  /**
+   * 查一次有没有新版本。**绝不抛** —— 查不通就是 `found: null` 加一句话。
+   *
+   * 三条规矩写在 main/update.ts 的文件头：启动时只查一次、
+   * 不自动下载不自动重启、装之前一定核对 SHA-256。
+   */
+  checkUpdate(): Promise<UpdateCheck>
+  /** 下载那个包。进度走 `onUpdateProgress`。校验值对不上会抛，并且把两串哈希都告诉你 */
+  downloadUpdate(): Promise<{ file: string }>
+  /** 装上。安装版会退出自己、装完重新起来；免安装版只在资源管理器里指给你看 */
+  installUpdate(file: string): Promise<void>
   chooseRoot(): Promise<string | null>
   /** 认得的作品库有哪些，正在用的是哪个 */
   listRoots(): Promise<{ roots: string[]; active: string | null }>
@@ -738,6 +756,9 @@ export interface BuguApi {
   aiCancel(requestId: string): Promise<boolean>
   /** 订阅流式片段，返回取消订阅的函数 */
   onAiDelta(fn: (e: { requestId: string; kind: 'text' | 'thinking'; text: string }) => void): () => void
+
+  /** 下载新版本的进度。返回取消订阅的函数 */
+  onUpdateProgress(fn: (e: { got: number; total: number }) => void): () => void
 
   /**
    * 拖进来的这个 `File` 在硬盘上的路径。拿不到返回空串。

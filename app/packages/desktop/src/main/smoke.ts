@@ -1016,6 +1016,16 @@ const E2E_SCRIPT = `(async () => {
     const seed = await api.createChapter(book.rootPath + '/正文', '冲突试验章')
     await api.saveDoc(seed.path, '正本写的是这一句。' + String.fromCharCode(10, 10) + '第二段两边一样。')
 
+    // ── 自动升级：查不通的时候必须一声不响 ──
+    //
+    // 这一步验的是**最常见的那条路**：没网、服务器还没摆上那份清单、
+    // 代理没开。那时候它必须「没有新版本 + 一句话」，而不是抛异常 ——
+    // 一个装饰性的检查有能力打断启动，是不能接受的。
+    var up = await api.checkUpdate()
+    check('检查更新不抛，也没瞎报新版本', !!up && up.found === null, JSON.stringify(up && up.error))
+    check('检查更新报的是当前版本', !!up && typeof up.current === 'string' && up.current.length > 0,
+      up && up.current)
+
     // ── 书架上那两个数：字数、上次动笔、最近编辑 ──
     //
     // 三样都是新写的 SQL，而它们错了的样子很安静：卡片上少一行、

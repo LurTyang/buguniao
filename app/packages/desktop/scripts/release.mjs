@@ -151,16 +151,107 @@ for (const name of entries.filter((e) => e.isFile() && SCRAP.test(e.name)).map((
 
 // ── 3. 当前版本的校验值 ─────────────────────────────────────
 const lines = []
+const sizes = new Map()
 for (const name of current.sort()) {
   const file = path.join(releaseDir, name)
   const hash = await sha256(file)
   const size = (await stat(file)).size
+  sizes.set(name, size)
   lines.push(`${hash}  ${name}`)
   console.log(`  ${name}  ${mb(size)}`)
 }
 await writeFile(path.join(releaseDir, 'SHA256SUMS.txt'), lines.join('\n') + '\n', 'utf8')
 
-// ── 4. 阁楼里有什么，写一份清单 ─────────────────────────────
+// ── 4. 升级清单 latest.json ─────────────────────────────────
+/*
+ * 软件启动时读的就是这一份（`shared/update.ts` 里那套规矩）。
+ *
+ * **下载地址写在清单里，不写在软件里** —— 哪天换个 host（自己的服务器、
+ * GitHub、对象存储、某个网盘），改这份清单就行，已经装在别人机器上的
+ * 软件会跟着换过去，不用为了换个地址再发一版。
+ *
+ * 地址前缀用环境变量给：`BUGU_DL_BASE=https://某处/dl/ pnpm release`。
+ * 不写就用作者自己那台（跟对外统计同一个域名，Caddy 加一段 file_server 就行）。
+ *
+ * 版本名和那句话从**更新日志**里读 —— 一处写、一处用。
+ * 日志顶上那条跟 package.json 的版本号对不上时**只警告不阻断**：
+ * 打包已经成了，这时候拦下来只会让人去改脚本，而不是去写日志。
+ */
+const DL_BASE = (process.env['BUGU_DL_BASE'] ?? 'https://bugu.char46.top/dl/').replace(/\/*$/, '/')
+const REPO = 'https://github.com/LurTyang/buguniao'
+
+/** 从更新日志顶上那条里读出版本号、名字、日期和第一段话 */
+const NL = String.fromCharCode(10)
+function readChangelogHead(text) {
+  const m = /^##[ 	]+([0-9][^「\s·]*)[ 	]*(?:「([^」]+)」)?[ 	]*(?:·[ 	]*(\d{4}-\d{2}-\d{2}))?/m.exec(text)
+  if (!m) return null
+  const after = text.slice(m.index + m[0].length)
+  // 第一段话：跳过空行，取到下一个空行为止，顺手把 Markdown 的星号去掉
+  const para = (after.split(NL + NL).find((x) => x.trim() !== '') ?? '').trim()
+  return {
+    version: m[1],
+    name: m[2] ?? '',
+    date: m[3] ?? '',
+    notes: para
+      .replace(/\*\*/g, '')
+      .split(NL)
+      .map((x) => x.trim())
+      .filter(Boolean)
+      .join(' ')
+      .slice(0, 300),
+  }
+}
+
+const assetOf = (name) => {
+  const line = lines.find((l) => l.endsWith(`  ${name}`))
+  if (!line) return null
+  const size = current.includes(name) ? sizes.get(name) ?? 0 : 0
+  return { url: DL_BASE + name, size, sha256: line.slice(0, 64) }
+}
+
+let head = null
+try {
+  head = readChangelogHead(await readFile(path.join(pkgDir, '../../../更新日志.md'), 'utf8'))
+} catch {
+  head = null
+}
+/**
+ * 松着比版本号：更新日志里写「1.0」，package.json 里写「1.0.0」——
+ * 这两个是同一版。严格比的话每次发版都会冤枉一次作者，
+ * 然后他就学会了忽略这个警告，那这个警告就白留了。
+ */
+function sameVersion(a, b) {
+  const core = (v) => {
+    const [h = ''] = String(v).replace(/^v/i, '').split('-')
+    const p = h.split('.').map((x) => Number(x) || 0)
+    while (p.length < 3) p.push(0)
+    return p.slice(0, 3).join('.')
+  }
+  const pre = (v) => String(v).replace(/^v/i, '').split('-').slice(1).join('-')
+  return core(a) === core(b) && pre(a) === pre(b)
+}
+
+const sameAsLog = head !== null && sameVersion(head.version, version)
+if (head && !sameAsLog) {
+  console.warn(`  ⚠ 更新日志顶上写的是 ${head.version}，而这次打的是 ${version} —— 日志忘了写？`)
+}
+
+const setupName = current.find((n) => n.includes('setup')) ?? ''
+const portableName = current.find((n) => !n.includes('setup')) ?? ''
+const manifest = {
+  version,
+  name: sameAsLog ? head.name : '',
+  date: (sameAsLog ? head.date : '') || new Date().toISOString().slice(0, 10),
+  notes: sameAsLog ? head.notes : '',
+  page: `${REPO}/releases/tag/v${version}`,
+  setup: setupName ? assetOf(setupName) : null,
+  portable: portableName ? assetOf(portableName) : null,
+}
+await writeFile(path.join(releaseDir, 'latest.json'), JSON.stringify(manifest, null, 2) + NL, 'utf8')
+console.log(`  latest.json（升级清单）：${manifest.version}${manifest.name ? `「${manifest.name}」` : ''}`)
+console.log(`    下载地址前缀 ${DL_BASE} —— 换 host 只改这份清单，不用再发一版`)
+
+// ── 5. 阁楼里有什么，写一份清单 ─────────────────────────────
 try {
   const kept = (await readdir(atticDir)).filter((n) => n.toLowerCase().endsWith('.exe')).sort()
   if (kept.length > 0) {

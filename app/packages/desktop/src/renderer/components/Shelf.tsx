@@ -14,6 +14,7 @@ import { ConfirmModal, FormModal, PromptModal } from './Modal.js'
 import { useContextMenu, type MenuItem } from './ContextMenu.js'
 import { rootName, sameRoot } from '../../shared/roots.js'
 import { agoText, charsText } from '../say.js'
+import { UpdateBanner } from './UpdateBanner.js'
 import type { BookStat, RecentDoc } from '../../shared/api.js'
 import { PinIcon } from './Sidebar.js'
 
@@ -319,6 +320,12 @@ export function Shelf({
           </button>
         </div>
       </div>
+
+      {/*
+        有新版本时挂一条。摆在书架上、不摆在稿纸上 ——
+        写字的时候最不该被打扰，而「有新版本」一点也不急。
+      */}
+      <UpdateBanner />
 
       {error && (
         <div className="banner danger">

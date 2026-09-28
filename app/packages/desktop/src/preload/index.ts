@@ -18,6 +18,9 @@ async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
 
 const api = {
   getRoot: () => call<string | null>('getRoot'),
+  checkUpdate: () => call<unknown>('checkUpdate'),
+  downloadUpdate: () => call<{ file: string }>('downloadUpdate'),
+  installUpdate: (file: string) => call<void>('installUpdate', file),
   chooseRoot: () => call<string | null>('chooseRoot'),
   shelfStats: () => call<unknown[]>('shelfStats'),
   recentDocs: (n?: number) => call<unknown[]>('recentDocs', n),
@@ -227,4 +230,11 @@ function onAiDelta(fn: (e: { requestId: string; kind: 'text' | 'thinking'; text:
   return () => ipcRenderer.off('ai:delta', listener)
 }
 
-contextBridge.exposeInMainWorld('bugu', { ...api, onMenu, onAiDelta, pathForFile })
+/** 下载新版本的进度。返回取消订阅的函数 */
+function onUpdateProgress(fn: (e: { got: number; total: number }) => void): () => void {
+  const listener = (_e: unknown, payload: { got: number; total: number }) => fn(payload)
+  ipcRenderer.on('update:progress', listener)
+  return () => ipcRenderer.off('update:progress', listener)
+}
+
+contextBridge.exposeInMainWorld('bugu', { ...api, onMenu, onAiDelta, onUpdateProgress, pathForFile })

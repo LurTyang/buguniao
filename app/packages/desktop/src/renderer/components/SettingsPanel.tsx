@@ -509,6 +509,25 @@ export function SettingsPanel({ settings, onChange, onChangeRoot }: SettingsPane
         <Hint>认得的作品库有好几个时，回书架点顶栏那个文件夹名就能切。</Hint>
         <Hint>本机标识 <code>{settings.deviceId}</code></Hint>
       </Section>
+
+      <Section title="升级">
+        <Row label="启动时检查新版本">
+          <Toggle
+            on={settings.updateCheck !== false}
+            onChange={(v) => onChange({ updateCheck: v })}
+          />
+        </Row>
+        {/*
+          说清楚「查」和「下」是两件事。
+          一个写作软件在你写字的时候偷偷下 100MB、甚至自己重启，
+          是最不能接受的事 —— 所以这儿只查，下载和安装都要你点。
+        */}
+        <Hint>
+          只查一份几 KB 的清单，发现新版只在书架上挂一条；<b>下载和安装都要你自己点</b>。
+          <br />
+          查不通（没网、代理没开）一声不响，不会拦着你写字。
+        </Hint>
+      </Section>
     </div>
   )
 }

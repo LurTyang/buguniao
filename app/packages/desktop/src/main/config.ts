@@ -34,6 +34,22 @@ export interface UserConfig {
   /** 正在用的那个作品库目录的绝对路径。未设置为 null */
   root: string | null
   /**
+   * 启动时查一下有没有新版本。
+   *
+   * 查的是一份几 KB 的清单，查不通一律沉默。关掉它就一次都不查 ——
+   * 有人不想让软件联网，这是他的自由。
+   */
+  updateCheck: boolean
+  /**
+   * 那份清单在哪儿。
+   *
+   * **下载地址写在清单里，不写在软件里** —— 哪天换个 host
+   * （自己的服务器、GitHub、对象存储、某个网盘），改那份清单就行，
+   * 已经装在别人机器上的软件会跟着换过去。这一项能改，是为了
+   * 万一连清单那个地址都得换（比如域名没了），作者还能自救。
+   */
+  updateUrl: string
+  /**
    * 侧边栏里那些可以收起的小节，哪些是展开着的。键是小节的 id。
    *
    * 一张自由的表，不是几个写死的布尔值 —— 小节以后还会加（AI 工作台那边
@@ -230,6 +246,8 @@ const DEFAULTS: Omit<UserConfig, 'deviceId'> = {
   root: null,
   roots: [],
   sections: {},
+  updateCheck: true,
+  updateUrl: 'https://bugu.char46.top/dl/latest.json',
   countMode: 'withPunctuation',
   theme: 'light',
   themeCss: '',

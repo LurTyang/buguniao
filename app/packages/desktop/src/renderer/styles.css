@@ -5011,3 +5011,44 @@ button.links-item:hover {
   color: var(--control-text-color);
   padding: 0 6px;
 }
+
+/* ───────────────── 「有新版本」那一条 ─────────────────
+   摆在书架上。做得像一条通知，不像一个弹窗 ——
+   它一点也不急，不该挡住你点书。 */
+.banner.update {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--primary-color);
+  color: var(--text-color);
+}
+
+.update-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.update-main b {
+  font-size: 15px;
+}
+
+.update-notes {
+  font-size: 13px;
+  color: var(--control-text-color);
+  white-space: pre-wrap;
+}
+
+.update-notes.danger {
+  color: var(--danger);
+}
+
+.update-acts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
